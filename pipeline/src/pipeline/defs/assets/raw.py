@@ -64,7 +64,9 @@ def _ingest_raw_file(
         stored_body.close()
 
     if stored != payload:
-        raise RuntimeError(f"Uploaded bytes do not match download for s3://{RAW_BUCKET}/{object_key}")
+        raise RuntimeError(
+            f"Uploaded bytes do not match download for s3://{RAW_BUCKET}/{object_key}"
+        )
 
     return MaterializeResult(
         metadata={

@@ -2,6 +2,7 @@ from datetime import datetime
 from io import BytesIO
 
 import pytest
+
 from pipeline.defs.assets import raw
 from pipeline.storage import RAW_BUCKET
 

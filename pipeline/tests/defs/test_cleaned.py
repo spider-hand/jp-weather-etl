@@ -1,9 +1,9 @@
 from datetime import date, datetime
 from io import StringIO
 
-from dagster import DagsterEventType, DefaultScheduleStatus, Definitions, materialize
 import polars as pl
 import pytest
+from dagster import DagsterEventType, DefaultScheduleStatus, Definitions, materialize
 
 from pipeline.defs import jobs, schedules
 from pipeline.defs.assets import cleaned, raw
@@ -21,8 +21,10 @@ class FrozenDateTime:
 
 
 def _frame(headers, values):
-    csv = ",".join([*COMMON_HEADERS, *headers]) + "\n" + ",".join(
-        [*COMMON_VALUES, *values]
+    csv = (
+        ",".join([*COMMON_HEADERS, *headers])
+        + "\n"
+        + ",".join([*COMMON_VALUES, *values])
     )
     return pl.read_csv(StringIO(csv), infer_schema=False)
 
@@ -137,8 +139,10 @@ def test_find_column(columns, expected):
 
 
 def _payload(headers, values):
-    csv = ",".join([*COMMON_HEADERS, *headers]) + "\r\n" + ",".join(
-        [*COMMON_VALUES, *values]
+    csv = (
+        ",".join([*COMMON_HEADERS, *headers])
+        + "\r\n"
+        + ",".join([*COMMON_VALUES, *values])
     )
     return (csv + "\r\n").encode("shift_jis")
 

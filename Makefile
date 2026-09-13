@@ -1,4 +1,4 @@
-.PHONY: dev down storage-up storage-setup storage-smoke storage-reset test
+.PHONY: dev down storage-up storage-setup storage-smoke storage-reset format lint test
 
 storage-up:
 	docker compose up -d --wait
@@ -17,6 +17,12 @@ dev: storage-setup
 
 down:
 	docker compose down
+
+format:
+	uv run --project pipeline ruff format pipeline
+
+lint:
+	uv run --project pipeline ruff check pipeline
 
 test:
 	uv run --project pipeline pytest

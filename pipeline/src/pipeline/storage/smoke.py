@@ -15,7 +15,9 @@ def smoke_check() -> None:
         try:
             stored = client.get_object(Bucket=bucket, Key=key)["Body"].read()
             if stored != payload:
-                raise RuntimeError(f"Smoke check returned unexpected data from {bucket!r}")
+                raise RuntimeError(
+                    f"Smoke check returned unexpected data from {bucket!r}"
+                )
         finally:
             client.delete_object(Bucket=bucket, Key=key)
 

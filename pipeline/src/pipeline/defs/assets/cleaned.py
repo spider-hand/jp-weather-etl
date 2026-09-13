@@ -1,13 +1,13 @@
 """Parse raw JMA CSV objects into stable, typed DataFrames."""
 
-from collections.abc import Callable
-from datetime import date, datetime
-from io import StringIO
 import re
+from collections.abc import Callable
+from datetime import date
+from io import StringIO
 from typing import Final
 
-from dagster import AssetExecutionContext, AssetKey, DagsterEventType, asset
 import polars as pl
+from dagster import AssetExecutionContext, AssetKey, DagsterEventType, asset
 
 from pipeline.storage import RAW_BUCKET, create_s3_client
 
@@ -138,7 +138,10 @@ def _source_object(
             f"Invalid destination_object_key for {raw_asset}: {object_key!r}; "
             f"expected YYYYMMDD/{filename}"
         )
-    return object_key, datetime.strptime(match.group("date"), "%Y%m%d").date()
+    raw_date = match.group("date")
+    return object_key, date.fromisoformat(
+        f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
+    )
 
 
 def _read_raw_csv(object_key: str) -> pl.DataFrame:
@@ -156,10 +159,7 @@ def _text(source: str, target: str) -> pl.Expr:
 
 def _common(observation_date: date) -> list[pl.Expr]:
     return [
-        *(
-            _text(source, target)
-            for source, target in COMMON_COLUMN_MAPPING.items()
-        ),
+        *(_text(source, target) for source, target in COMMON_COLUMN_MAPPING.items()),
         pl.lit(observation_date, dtype=pl.Date).alias("date"),
     ]
 
