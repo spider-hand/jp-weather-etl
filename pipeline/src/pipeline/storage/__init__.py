@@ -1,4 +1,4 @@
-"""Shared S3 client configuration."""
+"""S3-compatible storage configuration for the pipeline."""
 
 import os
 
@@ -18,11 +18,12 @@ _REQUIRED_ENV = (
 
 
 def create_s3_client():
-    """Create a path-style S3 client for the configured endpoint."""
+    """Create a path-style S3 client from the project's environment variables."""
     missing = [name for name in _REQUIRED_ENV if not os.environ.get(name)]
     if missing:
-        names = ", ".join(missing)
-        raise RuntimeError(f"Missing required storage environment variables: {names}")
+        raise RuntimeError(
+            "Missing required storage environment variables: " + ", ".join(missing)
+        )
 
     return boto3.client(
         "s3",

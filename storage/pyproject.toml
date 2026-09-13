@@ -1,7 +1,0 @@
-[project]
-name = "storage"
-requires-python = ">=3.10,<3.15"
-version = "0.1.0"
-dependencies = [
-    "boto3>=1.40,<2",
-]

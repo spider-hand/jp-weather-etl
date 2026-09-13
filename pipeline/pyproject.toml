@@ -3,6 +3,7 @@ name = "pipeline"
 requires-python = ">=3.10,<3.15"
 version = "0.1.0"
 dependencies = [
+    "boto3>=1.40,<2",
     "dagster==1.13.22",
 ]
 
@@ -10,6 +11,8 @@ dependencies = [
 dev = [
     "dagster-dg-cli",
     "dagster-webserver",
+    "moto[s3]>=5,<6",
+    "pytest>=8,<10",
 ]
 
 [build-system]
@@ -27,4 +30,3 @@ root_module = "pipeline"
 registry_modules = [
     "pipeline.components.*",
 ]
-
