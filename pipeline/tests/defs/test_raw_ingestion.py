@@ -2,29 +2,27 @@ from datetime import datetime
 from io import BytesIO
 
 import pytest
-from dagster import Definitions
-
-from pipeline.defs import raw_ingestion
+from pipeline.defs.assets import raw
 from pipeline.storage import RAW_BUCKET
 
 
 class FrozenDateTime:
     @classmethod
     def now(cls, timezone):
-        assert timezone is raw_ingestion.JST
+        assert timezone is raw.JST
         return datetime(2024, 1, 2, 23, 30, tzinfo=timezone)
 
 
 def test_ingestion_preserves_bytes_and_uses_jst_date(monkeypatch, s3_client):
     payload = b"\x8a\xcf\x91\xaa,\x93\x8c\x8b\x9e\r\n"
     monkeypatch.setattr(
-        raw_ingestion,
+        raw,
         "_download_bytes",
         lambda _url: (payload, "text/csv"),
     )
-    monkeypatch.setattr(raw_ingestion, "datetime", FrozenDateTime)
+    monkeypatch.setattr(raw, "datetime", FrozenDateTime)
 
-    result = raw_ingestion._ingest_raw_file(
+    result = raw._ingest_raw_file(
         "https://example.test/source.csv",
         "precipitation.csv",
     )
@@ -48,8 +46,8 @@ def test_ingestion_preserves_bytes_and_uses_jst_date(monkeypatch, s3_client):
 
 
 def test_ingestion_fails_when_stored_bytes_differ(monkeypatch, s3_client):
-    monkeypatch.setattr(raw_ingestion, "_download_bytes", lambda _url: (b"original", ""))
-    monkeypatch.setattr(raw_ingestion, "datetime", FrozenDateTime)
+    monkeypatch.setattr(raw, "_download_bytes", lambda _url: (b"original", ""))
+    monkeypatch.setattr(raw, "datetime", FrozenDateTime)
     monkeypatch.setattr(
         s3_client,
         "get_object",
@@ -57,25 +55,13 @@ def test_ingestion_fails_when_stored_bytes_differ(monkeypatch, s3_client):
     )
 
     with pytest.raises(RuntimeError, match="Uploaded bytes do not match download"):
-        raw_ingestion._ingest_raw_file(
+        raw._ingest_raw_file(
             "https://example.test/source.csv",
             "precipitation.csv",
         )
 
 
-def test_dagster_definitions_are_loadable():
-    defs = Definitions(
-        assets=raw_ingestion.RAW_ASSETS,
-        jobs=[raw_ingestion.raw_ingestion_job],
-        schedules=[raw_ingestion.raw_ingestion_schedule],
+def test_raw_asset_keys_match_files():
+    assert {asset.key.to_user_string() for asset in raw.RAW_ASSETS} == set(
+        raw.RAW_FILES
     )
-
-    Definitions.validate_loadable(defs)
-    assert {asset.key.to_user_string() for asset in raw_ingestion.RAW_ASSETS} == set(
-        raw_ingestion.RAW_FILES
-    )
-    schedule = raw_ingestion.raw_ingestion_schedule
-    assert schedule.cron_schedule == "30 23 * * *"
-    assert schedule.execution_timezone == "Asia/Tokyo"
-    assert schedule.job_name == "raw_ingestion_job"
-    assert schedule.default_status is raw_ingestion.DefaultScheduleStatus.RUNNING

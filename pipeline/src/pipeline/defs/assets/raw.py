@@ -5,14 +5,7 @@ from hashlib import sha256
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
-from dagster import (
-    AssetSelection,
-    DefaultScheduleStatus,
-    MaterializeResult,
-    ScheduleDefinition,
-    asset,
-    define_asset_job,
-)
+from dagster import MaterializeResult, asset
 
 from pipeline.storage import RAW_BUCKET, create_s3_client
 
@@ -119,16 +112,3 @@ RAW_ASSETS = [
     max_wind_raw,
     max_gust_raw,
 ]
-
-raw_ingestion_job = define_asset_job(
-    "raw_ingestion_job",
-    selection=AssetSelection.assets(*RAW_ASSETS),
-)
-
-raw_ingestion_schedule = ScheduleDefinition(
-    name="raw_ingestion_schedule",
-    job=raw_ingestion_job,
-    cron_schedule="30 23 * * *",
-    execution_timezone="Asia/Tokyo",
-    default_status=DefaultScheduleStatus.RUNNING,
-)

@@ -5,6 +5,7 @@ version = "0.1.0"
 dependencies = [
     "boto3>=1.40,<2",
     "dagster==1.13.22",
+    "polars>=1,<2",
 ]
 
 [dependency-groups]
