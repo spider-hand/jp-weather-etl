@@ -7,15 +7,19 @@ from io import StringIO
 from typing import Final
 
 import polars as pl
-from dagster import AssetExecutionContext, AssetKey, DagsterEventType, asset
+from dagster import (
+    AssetCheckResult,
+    AssetExecutionContext,
+    AssetKey,
+    DagsterEventType,
+    asset,
+    asset_check,
+)
 
 from pipeline.storage import RAW_BUCKET, create_s3_client
 
 COMMON_COLUMN_MAPPING: Final = {
     "観測所番号": "station_id",
-    "都道府県": "prefecture",
-    "地点": "station_name",
-    "国際地点番号": "wmo_station_id",
 }
 
 # JMA column names use the observation day in place of ``{day}``.
@@ -49,9 +53,6 @@ COLUMN_MAPPINGS: Final = {
 
 COMMON_SCHEMA: Final = {
     "station_id": pl.String,
-    "prefecture": pl.String,
-    "station_name": pl.String,
-    "wmo_station_id": pl.String,
     "date": pl.Date,
 }
 PRECIPITATION_SCHEMA: Final = pl.Schema(
@@ -308,4 +309,86 @@ CLEANED_ASSETS = [
     min_temperature_cleaned,
     max_wind_cleaned,
     max_gust_cleaned,
+]
+
+JOIN_KEYS = ["station_id", "date"]
+
+
+def _valid_daily_weather_key(frame: pl.DataFrame) -> AssetCheckResult:
+    null_key_row_count = frame.filter(
+        pl.any_horizontal(*(pl.col(column).is_null() for column in JOIN_KEYS))
+    ).height
+    duplicate_key_count = (
+        frame.group_by(JOIN_KEYS).len().filter(pl.col("len") > 1).height
+    )
+    return AssetCheckResult(
+        passed=null_key_row_count == 0 and duplicate_key_count == 0,
+        metadata={
+            "null_key_row_count": null_key_row_count,
+            "duplicate_key_count": duplicate_key_count,
+        },
+    )
+
+
+@asset_check(
+    asset=precipitation_cleaned,
+    name="valid_daily_weather_key",
+    blocking=True,
+)
+def precipitation_cleaned_valid_daily_weather_key(
+    precipitation_cleaned: pl.DataFrame,
+) -> AssetCheckResult:
+    return _valid_daily_weather_key(precipitation_cleaned)
+
+
+@asset_check(
+    asset=max_temperature_cleaned,
+    name="valid_daily_weather_key",
+    blocking=True,
+)
+def max_temperature_cleaned_valid_daily_weather_key(
+    max_temperature_cleaned: pl.DataFrame,
+) -> AssetCheckResult:
+    return _valid_daily_weather_key(max_temperature_cleaned)
+
+
+@asset_check(
+    asset=min_temperature_cleaned,
+    name="valid_daily_weather_key",
+    blocking=True,
+)
+def min_temperature_cleaned_valid_daily_weather_key(
+    min_temperature_cleaned: pl.DataFrame,
+) -> AssetCheckResult:
+    return _valid_daily_weather_key(min_temperature_cleaned)
+
+
+@asset_check(
+    asset=max_wind_cleaned,
+    name="valid_daily_weather_key",
+    blocking=True,
+)
+def max_wind_cleaned_valid_daily_weather_key(
+    max_wind_cleaned: pl.DataFrame,
+) -> AssetCheckResult:
+    return _valid_daily_weather_key(max_wind_cleaned)
+
+
+@asset_check(
+    asset=max_gust_cleaned,
+    name="valid_daily_weather_key",
+    blocking=True,
+)
+def max_gust_cleaned_valid_daily_weather_key(
+    max_gust_cleaned: pl.DataFrame,
+) -> AssetCheckResult:
+    return _valid_daily_weather_key(max_gust_cleaned)
+
+
+CLEANED_KEY_CHECKS = [
+    precipitation_cleaned_valid_daily_weather_key,
+    max_temperature_cleaned_valid_daily_weather_key,
+    min_temperature_cleaned_valid_daily_weather_key,
+    max_wind_cleaned_valid_daily_weather_key,
+    max_gust_cleaned_valid_daily_weather_key,
 ]

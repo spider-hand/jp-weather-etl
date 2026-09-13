@@ -6,7 +6,7 @@ import pytest
 from dagster import DagsterEventType, DefaultScheduleStatus, Definitions, materialize
 
 from pipeline.defs import jobs, schedules
-from pipeline.defs.assets import cleaned, raw
+from pipeline.defs.assets import cleaned, daily, raw
 from pipeline.storage import RAW_BUCKET
 
 COMMON_HEADERS = ["観測所番号", "都道府県", "地点", "国際地点番号"]
@@ -96,7 +96,6 @@ def test_cleaned_schemas(transform, headers, values, expected_schema):
     result = transform(_frame(headers, values), date(2026, 9, 13))
 
     assert result.schema == expected_schema
-    assert result["wmo_station_id"].to_list() == [None]
     assert result["date"].to_list() == [date(2026, 9, 13)]
 
 
@@ -138,13 +137,11 @@ def test_find_column(columns, expected):
     assert f"Available columns: {columns!r}" in str(error.value)
 
 
-def _payload(headers, values):
-    csv = (
-        ",".join([*COMMON_HEADERS, *headers])
-        + "\r\n"
-        + ",".join([*COMMON_VALUES, *values])
-    )
-    return (csv + "\r\n").encode("shift_jis")
+def _payload(headers, values, common_rows=None):
+    common_rows = common_rows or [COMMON_VALUES]
+    lines = [",".join([*COMMON_HEADERS, *headers])]
+    lines.extend(",".join([*common, *values]) for common in common_rows)
+    return ("\r\n".join(lines) + "\r\n").encode("shift_jis")
 
 
 def _raw_payloads():
@@ -202,7 +199,8 @@ def test_weather_job_runs_raw_then_cleaned_without_writing_cleaned_objects(
     )
     monkeypatch.setattr(raw, "datetime", FrozenDateTime)
     defs = Definitions(
-        assets=[*raw.RAW_ASSETS, *cleaned.CLEANED_ASSETS],
+        assets=[*raw.RAW_ASSETS, *cleaned.CLEANED_ASSETS, daily.daily_weather],
+        asset_checks=cleaned.CLEANED_KEY_CHECKS,
         jobs=[jobs.weather_etl_job],
         schedules=[schedules.weather_etl_schedule],
     )
@@ -214,6 +212,9 @@ def test_weather_job_runs_raw_then_cleaned_without_writing_cleaned_objects(
     assert result.output_for_node("precipitation_cleaned")[
         "precipitation_mm"
     ].to_list() == [0.0]
+    daily_result = result.output_for_node("daily_weather")
+    assert daily_result.schema == daily.DAILY_WEATHER_SCHEMA
+    assert daily_result["precipitation_mm"].to_list() == [0.0]
     objects = s3_client.list_objects_v2(Bucket=RAW_BUCKET).get("Contents", [])
     assert {item["Key"] for item in objects} == {
         f"20260913/{filename}" for filename in payloads
@@ -222,9 +223,20 @@ def test_weather_job_runs_raw_then_cleaned_without_writing_cleaned_objects(
     positions = {
         event.asset_key.to_user_string(): index for index, event in enumerate(events)
     }
+    assert set(positions) == set(jobs.WEATHER_ASSET_KEYS)
     for raw_name in raw.RAW_FILES:
         cleaned_name = raw_name.removesuffix("_raw") + "_cleaned"
         assert positions[raw_name] < positions[cleaned_name]
+        assert positions[cleaned_name] < positions["daily_weather"]
+
+    evaluations = result.get_asset_check_evaluations()
+    assert {evaluation.asset_key.to_user_string() for evaluation in evaluations} == {
+        asset.key.to_user_string() for asset in cleaned.CLEANED_ASSETS
+    }
+    assert {evaluation.check_name for evaluation in evaluations} == {
+        "valid_daily_weather_key"
+    }
+    assert all(evaluation.passed for evaluation in evaluations)
 
     precipitation_event = next(
         event
@@ -235,14 +247,88 @@ def test_weather_job_runs_raw_then_cleaned_without_writing_cleaned_objects(
     assert metadata["source_object_key"].value == "20260913/precipitation.csv"
     assert metadata["observation_date"].value == "2026-09-13"
     assert metadata["row_count"].value == 1
-    assert metadata["column_count"].value == 7
+    assert metadata["column_count"].value == 4
     assert metadata["null_count"].value == 0
+
+    daily_event = next(
+        event
+        for event in events
+        if event.asset_key.to_user_string() == "daily_weather"
+    )
+    daily_metadata = daily_event.event_specific_data.materialization.metadata
+    assert daily_metadata["row_count"].value == 1
+    assert daily_metadata["column_count"].value == 16
 
     schedule = schedules.weather_etl_schedule
     assert schedule.cron_schedule == "30 23 * * *"
     assert schedule.execution_timezone == "Asia/Tokyo"
     assert schedule.job_name == "weather_etl_job"
     assert schedule.default_status is DefaultScheduleStatus.RUNNING
+
+
+@pytest.mark.parametrize(
+    ("common_rows", "null_key_row_count", "duplicate_key_count"),
+    [
+        pytest.param(
+            [["", "北海道", "宗谷岬", ""]],
+            1,
+            0,
+            id="null-station-id",
+        ),
+        pytest.param(
+            [COMMON_VALUES, COMMON_VALUES],
+            0,
+            1,
+            id="duplicate-key",
+        ),
+    ],
+)
+def test_invalid_cleaned_key_blocks_daily_weather(
+    monkeypatch,
+    s3_client,
+    common_rows,
+    null_key_row_count,
+    duplicate_key_count,
+):
+    payloads = _raw_payloads()
+    payloads["precipitation.csv"] = _payload(
+        ["13日の値(mm)", "13日の値の品質情報"],
+        ["0.0", "5"],
+        common_rows,
+    )
+    urls = {url: filename for url, filename in raw.RAW_FILES.values()}
+    monkeypatch.setattr(
+        raw,
+        "_download_bytes",
+        lambda url: (payloads[urls[url]], "text/csv"),
+    )
+    monkeypatch.setattr(raw, "datetime", FrozenDateTime)
+    defs = Definitions(
+        assets=[*raw.RAW_ASSETS, *cleaned.CLEANED_ASSETS, daily.daily_weather],
+        asset_checks=cleaned.CLEANED_KEY_CHECKS,
+        jobs=[jobs.weather_etl_job],
+    )
+
+    result = defs.resolve_job_def("weather_etl_job").execute_in_process(
+        raise_on_error=False
+    )
+
+    evaluation = next(
+        evaluation
+        for evaluation in result.get_asset_check_evaluations()
+        if evaluation.asset_key.to_user_string() == "precipitation_cleaned"
+    )
+    assert not evaluation.passed
+    assert (
+        evaluation.metadata["null_key_row_count"].value == null_key_row_count
+    )
+    assert evaluation.metadata["duplicate_key_count"].value == duplicate_key_count
+    materialized_assets = {
+        event.asset_key.to_user_string()
+        for event in result.get_asset_materialization_events()
+    }
+    assert "precipitation_cleaned" in materialized_assets
+    assert "daily_weather" not in materialized_assets
 
 
 def test_cleaned_asset_fails_without_raw_materialization_in_same_run():

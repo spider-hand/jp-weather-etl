@@ -11,6 +11,7 @@ WEATHER_ASSET_KEYS = (
     "min_temperature_cleaned",
     "max_wind_cleaned",
     "max_gust_cleaned",
+    "daily_weather",
 )
 
 weather_etl_job = define_asset_job(
