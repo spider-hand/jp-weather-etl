@@ -12,6 +12,7 @@ WEATHER_ASSET_KEYS = (
     "max_wind_cleaned",
     "max_gust_cleaned",
     "daily_weather",
+    "active_stations",
 )
 
 weather_etl_job = define_asset_job(
