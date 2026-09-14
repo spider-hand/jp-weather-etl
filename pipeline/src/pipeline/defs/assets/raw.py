@@ -2,6 +2,7 @@
 
 import json
 import os
+from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -10,7 +11,7 @@ from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
 import polars as pl
-from dagster import MaterializeResult, asset
+from dagster import AssetExecutionContext, MaterializeResult, asset
 
 from pipeline.storage import RAW_BUCKET, create_s3_client, upload_verified_payload
 
@@ -143,6 +144,40 @@ def _validate_pollen_date(
         )
 
 
+def _download_pollen_results(
+    active_stations: pl.DataFrame,
+    api_key: str,
+    expected_date: date,
+    log_info: Callable[[str], None],
+) -> list[dict[str, Any]]:
+    station_count = active_stations.height
+    log_info(f"Requesting pollen forecasts for {station_count} stations")
+    results = []
+    for index, station in enumerate(active_stations.iter_rows(named=True), start=1):
+        station_id = station["station_id"]
+        latitude = station["latitude"]
+        longitude = station["longitude"]
+        log_info(
+            f"Requesting pollen forecast {index}/{station_count} "
+            f"for station {station_id!r}"
+        )
+        response = _download_pollen_response(latitude, longitude, api_key)
+        _validate_pollen_date(response, expected_date, station_id)
+        results.append(
+            {
+                "station_id": station_id,
+                "latitude": latitude,
+                "longitude": longitude,
+                "response": response,
+            }
+        )
+        log_info(
+            f"Retrieved pollen forecast {index}/{station_count} "
+            f"for station {station_id!r}"
+        )
+    return results
+
+
 @asset(group_name="raw")
 def precipitation_raw() -> MaterializeResult:
     return _ingest_raw_file(*RAW_FILES["precipitation_raw"])
@@ -169,27 +204,20 @@ def max_gust_raw() -> MaterializeResult:
 
 
 @asset(group_name="raw")
-def pollen_raw(active_stations: pl.DataFrame) -> MaterializeResult:
+def pollen_raw(
+    context: AssetExecutionContext, active_stations: pl.DataFrame
+) -> MaterializeResult:
     api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not api_key:
         raise RuntimeError("Missing Google Maps API key")
 
     timestamp = datetime.now(JST)
-    results = []
-    for station in active_stations.iter_rows(named=True):
-        station_id = station["station_id"]
-        latitude = station["latitude"]
-        longitude = station["longitude"]
-        response = _download_pollen_response(latitude, longitude, api_key)
-        _validate_pollen_date(response, timestamp.date(), station_id)
-        results.append(
-            {
-                "station_id": station_id,
-                "latitude": latitude,
-                "longitude": longitude,
-                "response": response,
-            }
-        )
+    results = _download_pollen_results(
+        active_stations,
+        api_key,
+        timestamp.date(),
+        context.log.info,
+    )
 
     payload = json.dumps(
         {"results": results}, ensure_ascii=False, separators=(",", ":")

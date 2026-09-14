@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlparse
 
 import polars as pl
 import pytest
+from dagster import build_asset_context
 
 from pipeline.defs.assets import raw
 from pipeline.storage import RAW_BUCKET
@@ -127,6 +128,31 @@ def test_pollen_request_rejects_invalid_json(monkeypatch):
         raw._download_pollen_response(35.0, 139.0, "secret")
 
 
+def test_download_pollen_results_reports_progress(monkeypatch):
+    messages = []
+    monkeypatch.setattr(
+        raw,
+        "_download_pollen_response",
+        lambda *_args: _pollen_response(),
+    )
+
+    results = raw._download_pollen_results(
+        _active_stations(),
+        "secret",
+        date(2024, 1, 2),
+        messages.append,
+    )
+
+    assert [result["station_id"] for result in results] == ["A", "B"]
+    assert messages == [
+        "Requesting pollen forecasts for 2 stations",
+        "Requesting pollen forecast 1/2 for station 'A'",
+        "Retrieved pollen forecast 1/2 for station 'A'",
+        "Requesting pollen forecast 2/2 for station 'B'",
+        "Retrieved pollen forecast 2/2 for station 'B'",
+    ]
+
+
 def test_pollen_raw_aggregates_and_stores_json(monkeypatch, s3_client):
     requests = []
 
@@ -138,7 +164,7 @@ def test_pollen_raw_aggregates_and_stores_json(monkeypatch, s3_client):
     monkeypatch.setattr(raw, "datetime", FrozenDateTime)
     monkeypatch.setattr(raw, "_download_pollen_response", download)
 
-    result = raw.pollen_raw(_active_stations())
+    result = raw.pollen_raw(build_asset_context(), _active_stations())
 
     assert requests == [(35.0, 139.0, "secret"), (36.0, 140.0, "secret")]
     stored = s3_client.get_object(Bucket=RAW_BUCKET, Key="20240102/pollen.json")
@@ -175,7 +201,7 @@ def test_pollen_raw_date_mismatch_does_not_upload(monkeypatch, s3_client):
     )
 
     with pytest.raises(ValueError, match="Unexpected pollen forecast date"):
-        raw.pollen_raw(_active_stations())
+        raw.pollen_raw(build_asset_context(), _active_stations())
 
     assert "Contents" not in s3_client.list_objects_v2(Bucket=RAW_BUCKET)
 
@@ -184,7 +210,7 @@ def test_pollen_raw_requires_api_key(monkeypatch):
     monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="Missing Google Maps API key"):
-        raw.pollen_raw(_active_stations().clear())
+        raw.pollen_raw(build_asset_context(), _active_stations().clear())
 
 
 @pytest.mark.parametrize("daily_info", [None, [], [{}, {}]])
