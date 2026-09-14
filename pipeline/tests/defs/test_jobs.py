@@ -90,6 +90,15 @@ def _mock_inputs(monkeypatch, tmp_path, payloads):
         lambda url: (payloads[urls[url]], "text/csv"),
     )
     monkeypatch.setattr(raw, "datetime", FrozenDateTime)
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "secret")
+    monkeypatch.setattr(
+        raw,
+        "_download_pollen_response",
+        lambda *_args: {
+            "regionCode": "JP",
+            "dailyInfo": [{"date": {"year": 2026, "month": 9, "day": 13}}],
+        },
+    )
     station_master_path = tmp_path / "station_master.csv"
     station_master_path.write_bytes(
         (
@@ -122,7 +131,7 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
     objects = s3_client.list_objects_v2(Bucket=RAW_BUCKET).get("Contents", [])
     assert {item["Key"] for item in objects} == {
         f"20260913/{filename}" for filename in payloads
-    }
+    } | {"20260913/pollen.json"}
     events = result.get_asset_materialization_events()
     positions = {
         event.asset_key.to_user_string(): index for index, event in enumerate(events)
@@ -133,6 +142,7 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
         assert positions[raw_name] < positions[cleaned_name]
         assert positions[cleaned_name] < positions["daily_weather"]
     assert positions["daily_weather"] < positions["active_stations"]
+    assert positions["active_stations"] < positions["pollen_raw"]
 
     evaluations = result.get_asset_check_evaluations()
     assert {evaluation.asset_key.to_user_string() for evaluation in evaluations} == {

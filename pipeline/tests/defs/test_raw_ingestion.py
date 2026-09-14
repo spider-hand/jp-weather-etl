@@ -1,6 +1,9 @@
-from datetime import datetime
+import json
+from datetime import date, datetime
 from io import BytesIO
+from urllib.parse import parse_qs, urlparse
 
+import polars as pl
 import pytest
 
 from pipeline.defs.assets import raw
@@ -65,4 +68,130 @@ def test_ingestion_fails_when_stored_bytes_differ(monkeypatch, s3_client):
 def test_raw_asset_keys_match_files():
     assert {asset.key.to_user_string() for asset in raw.RAW_ASSETS} == set(
         raw.RAW_FILES
+    ) | {"pollen_raw"}
+
+
+def _pollen_response(day=2):
+    return {
+        "regionCode": "JP",
+        "dailyInfo": [
+            {
+                "date": {"year": 2024, "month": 1, "day": day},
+                "pollenTypeInfo": [{"code": "TREE", "displayName": "樹木"}],
+            }
+        ],
+    }
+
+
+def _active_stations():
+    return pl.DataFrame(
+        {
+            "station_id": ["A", "B"],
+            "station_name": ["Alpha", "Beta"],
+            "latitude": [35.0, 36.0],
+            "longitude": [139.0, 140.0],
+        }
     )
+
+
+def test_pollen_request_parameters(monkeypatch):
+    captured = {}
+    response = BytesIO(json.dumps(_pollen_response(), ensure_ascii=False).encode())
+
+    def fake_urlopen(url, timeout):
+        captured.update(url=url, timeout=timeout)
+        return response
+
+    monkeypatch.setattr(raw, "urlopen", fake_urlopen)
+
+    assert raw._download_pollen_response(35.0, 139.0, "secret") == _pollen_response()
+    query = parse_qs(urlparse(captured["url"]).query)
+    assert query == {
+        "key": ["secret"],
+        "location.latitude": ["35.0"],
+        "location.longitude": ["139.0"],
+        "days": ["1"],
+        "languageCode": ["ja"],
+    }
+    assert captured["timeout"] == raw.DOWNLOAD_TIMEOUT_SECONDS
+
+
+def test_pollen_request_rejects_invalid_json(monkeypatch):
+    monkeypatch.setattr(
+        raw,
+        "urlopen",
+        lambda *_args, **_kwargs: BytesIO(b"not json"),
+    )
+
+    with pytest.raises(json.JSONDecodeError):
+        raw._download_pollen_response(35.0, 139.0, "secret")
+
+
+def test_pollen_raw_aggregates_and_stores_json(monkeypatch, s3_client):
+    requests = []
+
+    def download(latitude, longitude, api_key):
+        requests.append((latitude, longitude, api_key))
+        return _pollen_response()
+
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "secret")
+    monkeypatch.setattr(raw, "datetime", FrozenDateTime)
+    monkeypatch.setattr(raw, "_download_pollen_response", download)
+
+    result = raw.pollen_raw(_active_stations())
+
+    assert requests == [(35.0, 139.0, "secret"), (36.0, 140.0, "secret")]
+    stored = s3_client.get_object(Bucket=RAW_BUCKET, Key="20240102/pollen.json")
+    payload = stored["Body"].read()
+    assert stored["ContentType"] == "application/json"
+    assert json.loads(payload) == {
+        "results": [
+            {
+                "station_id": "A",
+                "latitude": 35.0,
+                "longitude": 139.0,
+                "response": _pollen_response(),
+            },
+            {
+                "station_id": "B",
+                "latitude": 36.0,
+                "longitude": 140.0,
+                "response": _pollen_response(),
+            },
+        ]
+    }
+    assert result.metadata["source_url"] == raw.POLLEN_FORECAST_URL
+    assert result.metadata["station_count"] == 2
+
+
+def test_pollen_raw_date_mismatch_does_not_upload(monkeypatch, s3_client):
+    responses = iter([_pollen_response(), _pollen_response(day=3)])
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "secret")
+    monkeypatch.setattr(raw, "datetime", FrozenDateTime)
+    monkeypatch.setattr(
+        raw,
+        "_download_pollen_response",
+        lambda *_args: next(responses),
+    )
+
+    with pytest.raises(ValueError, match="Unexpected pollen forecast date"):
+        raw.pollen_raw(_active_stations())
+
+    assert "Contents" not in s3_client.list_objects_v2(Bucket=RAW_BUCKET)
+
+
+def test_pollen_raw_requires_api_key(monkeypatch):
+    monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="Missing Google Maps API key"):
+        raw.pollen_raw(_active_stations().clear())
+
+
+@pytest.mark.parametrize("daily_info", [None, [], [{}, {}]])
+def test_pollen_date_requires_exactly_one_daily_record(daily_info):
+    with pytest.raises(ValueError, match="exactly one pollen forecast day"):
+        raw._validate_pollen_date(
+            {"dailyInfo": daily_info},
+            date(2024, 1, 2),
+            "A",
+        )
