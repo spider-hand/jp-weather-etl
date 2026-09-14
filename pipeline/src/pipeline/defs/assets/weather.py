@@ -52,7 +52,7 @@ def _merge_daily_weather(
     )
 
 
-@asset(group_name="daily")
+@asset(group_name="weather")
 def daily_weather(
     context: AssetExecutionContext,
     precipitation_cleaned: pl.DataFrame,

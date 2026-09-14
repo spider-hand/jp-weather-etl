@@ -3,7 +3,6 @@
 import json
 import os
 from datetime import date, datetime
-from hashlib import sha256
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -13,7 +12,7 @@ from zoneinfo import ZoneInfo
 import polars as pl
 from dagster import MaterializeResult, asset
 
-from pipeline.storage import RAW_BUCKET, create_s3_client
+from pipeline.storage import RAW_BUCKET, create_s3_client, upload_verified_payload
 
 JST = ZoneInfo("Asia/Tokyo")
 DOWNLOAD_TIMEOUT_SECONDS = 30
@@ -56,35 +55,19 @@ def _store_raw_payload(
     **metadata: Any,
 ) -> MaterializeResult:
     object_key = f"{timestamp:%Y%m%d}/{filename}"
-    client = create_s3_client()
-
-    client.put_object(
-        Bucket=RAW_BUCKET,
-        Key=object_key,
-        Body=payload,
-        ContentType=content_type,
+    storage_metadata = upload_verified_payload(
+        create_s3_client(),
+        bucket=RAW_BUCKET,
+        object_key=object_key,
+        payload=payload,
+        content_type=content_type,
     )
-
-    stored_body = client.get_object(Bucket=RAW_BUCKET, Key=object_key)["Body"]
-    try:
-        stored = stored_body.read()
-    finally:
-        stored_body.close()
-
-    if stored != payload:
-        raise RuntimeError(
-            f"Uploaded bytes do not match download for s3://{RAW_BUCKET}/{object_key}"
-        )
 
     return MaterializeResult(
         metadata={
             **metadata,
-            "destination_bucket": RAW_BUCKET,
-            "destination_object_key": object_key,
-            "destination_uri": f"s3://{RAW_BUCKET}/{object_key}",
+            **storage_metadata,
             "downloaded_at_jst": timestamp.isoformat(),
-            "file_size_bytes": len(payload),
-            "sha256": sha256(payload).hexdigest(),
             "response_content_type": content_type,
         }
     )

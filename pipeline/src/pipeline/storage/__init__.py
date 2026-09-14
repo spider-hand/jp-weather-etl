@@ -1,6 +1,7 @@
 """S3-compatible storage configuration for the pipeline."""
 
 import os
+from hashlib import sha256
 
 import boto3
 from botocore.config import Config
@@ -33,3 +34,33 @@ def create_s3_client():
         region_name=os.environ["AWS_DEFAULT_REGION"],
         config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
+
+
+def upload_verified_payload(
+    client, *, bucket: str, object_key: str, payload: bytes, content_type: str
+) -> dict[str, str | int]:
+    client.put_object(
+        Bucket=bucket,
+        Key=object_key,
+        Body=payload,
+        ContentType=content_type,
+    )
+
+    stored_body = client.get_object(Bucket=bucket, Key=object_key)["Body"]
+    try:
+        stored = stored_body.read()
+    finally:
+        stored_body.close()
+
+    if stored != payload:
+        raise RuntimeError(
+            f"Uploaded bytes do not match payload for s3://{bucket}/{object_key}"
+        )
+
+    return {
+        "destination_bucket": bucket,
+        "destination_object_key": object_key,
+        "destination_uri": f"s3://{bucket}/{object_key}",
+        "file_size_bytes": len(payload),
+        "sha256": sha256(payload).hexdigest(),
+    }

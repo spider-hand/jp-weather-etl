@@ -58,7 +58,7 @@ def test_ingestion_fails_when_stored_bytes_differ(monkeypatch, s3_client):
         lambda **_kwargs: {"Body": BytesIO(b"changed")},
     )
 
-    with pytest.raises(RuntimeError, match="Uploaded bytes do not match download"):
+    with pytest.raises(RuntimeError, match="Uploaded bytes do not match payload"):
         raw._ingest_raw_file(
             "https://example.test/source.csv",
             "precipitation.csv",

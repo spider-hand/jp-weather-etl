@@ -93,6 +93,11 @@ POLLEN_TYPES: Final = tuple(
 PLANTS: Final = tuple(
     item.value for item in Plant if item is not Plant.PLANT_UNSPECIFIED
 )
+POLLEN_INFO_COLUMNS: Final = {
+    PollenType.GRASS.value: "grass_info",
+    PollenType.TREE.value: "tree_info",
+    PollenType.WEED.value: "weed_info",
+}
 PRECIPITATION_SCHEMA: Final = pl.Schema(
     COMMON_SCHEMA
     | {
@@ -132,14 +137,25 @@ MAX_GUST_SCHEMA: Final = pl.Schema(
         "max_gust_direction_quality": pl.Int64,
     }
 )
+PLANT_INFO_SCHEMA: Final = pl.Struct(
+    {
+        "code": pl.Enum(PLANTS),
+        "value": pl.Int64,
+    }
+)
+POLLEN_INFO_SCHEMA: Final = pl.Struct(
+    {
+        "value": pl.Int64,
+        "plants": pl.List(PLANT_INFO_SCHEMA),
+    }
+)
 POLLEN_SCHEMA: Final = pl.Schema(
     {
         "station_id": pl.String,
         "date": pl.Date,
-        "pollen_code": pl.Enum(POLLEN_TYPES),
-        "pollen_value": pl.Int64,
-        "plant_code": pl.Enum(PLANTS),
-        "plant_value": pl.Int64,
+        "grass_info": POLLEN_INFO_SCHEMA,
+        "tree_info": POLLEN_INFO_SCHEMA,
+        "weed_info": POLLEN_INFO_SCHEMA,
     }
 )
 CLEANED_SCHEMAS: Final = {
@@ -303,49 +319,59 @@ def _clean_pollen(payload: dict[str, Any], observation_date: date) -> pl.DataFra
             )
 
         day = daily_info[0]
-        # Ignore unknown and unspecified pollen codes; keep missing values as null.
-        pollen_values = {
-            item["code"]: (item.get("indexInfo") or {}).get("value")
-            for item in day.get("pollenTypeInfo", [])
-            if item.get("code") in POLLEN_TYPES
-        }
-        codes_with_plants = set()
+        pollen_groups = {}
+        for item in day.get("pollenTypeInfo", []):
+            pollen_code = item.get("code")
+            if pollen_code not in POLLEN_TYPES:
+                continue
+            if pollen_code in pollen_groups:
+                raise ValueError(
+                    f"Duplicate pollen type {pollen_code!r} for station {station_id!r}"
+                )
+            pollen_groups[pollen_code] = {
+                "value": (item.get("indexInfo") or {}).get("value"),
+                "plants": [],
+            }
+
+        plant_codes = set()
         for plant in day.get("plantInfo", []):
             plant_code = plant.get("code")
             description = plant.get("plantDescription") or {}
             pollen_code = description.get("type")
-            # A plant needs both a documented code and a documented pollen group.
             if plant_code not in PLANTS or pollen_code not in POLLEN_TYPES:
                 continue
-            codes_with_plants.add(pollen_code)
-            rows.append(
+            if plant_code in plant_codes:
+                raise ValueError(
+                    f"Duplicate plant {plant_code!r} for station {station_id!r}"
+                )
+            plant_codes.add(plant_code)
+            pollen_groups.setdefault(
+                pollen_code,
                 {
-                    "station_id": station_id,
-                    "date": observation_date,
-                    "pollen_code": pollen_code,
-                    "pollen_value": pollen_values.get(pollen_code),
-                    "plant_code": plant_code,
-                    "plant_value": (plant.get("indexInfo") or {}).get("value"),
+                    "value": None,
+                    "plants": [],
+                },
+            )["plants"].append(
+                {
+                    "code": plant_code,
+                    "value": (plant.get("indexInfo") or {}).get("value"),
                 }
             )
 
-        # Preserve a valid type-level value even when it has no valid plant rows.
-        for pollen_code, pollen_value in pollen_values.items():
-            if pollen_code not in codes_with_plants:
-                rows.append(
-                    {
-                        "station_id": station_id,
-                        "date": observation_date,
-                        "pollen_code": pollen_code,
-                        "pollen_value": pollen_value,
-                        "plant_code": None,
-                        "plant_value": None,
-                    }
-                )
+        for group in pollen_groups.values():
+            group["plants"].sort(key=lambda plant: plant["code"])
+        rows.append(
+            {
+                "station_id": station_id,
+                "date": observation_date,
+                **{
+                    column: pollen_groups.get(pollen_code)
+                    for pollen_code, column in POLLEN_INFO_COLUMNS.items()
+                },
+            }
+        )
 
-    return pl.DataFrame(rows, schema=POLLEN_SCHEMA).sort(
-        "station_id", "pollen_code", "plant_code", nulls_last=True
-    )
+    return pl.DataFrame(rows, schema=POLLEN_SCHEMA).sort("station_id")
 
 
 def _materialize_cleaned(
@@ -434,8 +460,10 @@ def pollen_cleaned(context: AssetExecutionContext) -> pl.DataFrame:
             "column_count": cleaned.width,
             "source_object_key": object_key,
             "observation_date": observation_date.isoformat(),
-            "null_pollen_value_count": cleaned["pollen_value"].null_count(),
-            "null_plant_value_count": cleaned["plant_value"].null_count(),
+            **{
+                f"null_{column}_count": cleaned[column].null_count()
+                for column in POLLEN_INFO_COLUMNS.values()
+            },
         }
     )
     return cleaned
@@ -470,12 +498,19 @@ def _valid_daily_weather_key(frame: pl.DataFrame) -> AssetCheckResult:
 
 
 def _valid_pollen_values(frame: pl.DataFrame) -> AssetCheckResult:
-    invalid_pollen_value_count = frame.filter(
-        pl.col("pollen_value").is_not_null() & ~pl.col("pollen_value").is_between(0, 5)
-    ).height
-    invalid_plant_value_count = frame.filter(
-        pl.col("plant_value").is_not_null() & ~pl.col("plant_value").is_between(0, 5)
-    ).height
+    invalid_pollen_value_count = 0
+    invalid_plant_value_count = 0
+    for row in frame.iter_rows(named=True):
+        for column in POLLEN_INFO_COLUMNS.values():
+            info = row[column]
+            if info is None:
+                continue
+            value = info["value"]
+            invalid_pollen_value_count += value is not None and not 0 <= value <= 5
+            invalid_plant_value_count += sum(
+                plant["value"] is not None and not 0 <= plant["value"] <= 5
+                for plant in info["plants"]
+            )
     return AssetCheckResult(
         passed=invalid_pollen_value_count == 0 and invalid_plant_value_count == 0,
         metadata={
@@ -551,12 +586,24 @@ def pollen_cleaned_valid_pollen_values(
     return _valid_pollen_values(pollen_cleaned)
 
 
+@asset_check(
+    asset=pollen_cleaned,
+    name="valid_daily_weather_key",
+    blocking=True,
+)
+def pollen_cleaned_valid_daily_weather_key(
+    pollen_cleaned: pl.DataFrame,
+) -> AssetCheckResult:
+    return _valid_daily_weather_key(pollen_cleaned)
+
+
 CLEANED_KEY_CHECKS = [
     precipitation_cleaned_valid_daily_weather_key,
     max_temperature_cleaned_valid_daily_weather_key,
     min_temperature_cleaned_valid_daily_weather_key,
     max_wind_cleaned_valid_daily_weather_key,
     max_gust_cleaned_valid_daily_weather_key,
+    pollen_cleaned_valid_daily_weather_key,
 ]
 
 CLEANED_CHECKS = [*CLEANED_KEY_CHECKS, pollen_cleaned_valid_pollen_values]

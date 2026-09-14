@@ -3,7 +3,7 @@ from datetime import date
 import polars as pl
 import pytest
 
-from pipeline.defs.assets import cleaned, daily
+from pipeline.defs.assets import cleaned, weather
 
 OBSERVATION_DATE = date(2026, 9, 13)
 
@@ -13,7 +13,7 @@ def _frame(schema: pl.Schema, rows: list[dict]) -> pl.DataFrame:
 
 
 def test_daily_weather_full_joins_and_sorts_all_cleaned_keys():
-    result = daily._merge_daily_weather(
+    result = weather._merge_daily_weather(
         _frame(
             cleaned.PRECIPITATION_SCHEMA,
             [
@@ -41,7 +41,7 @@ def test_daily_weather_full_joins_and_sorts_all_cleaned_keys():
         _frame(cleaned.MAX_GUST_SCHEMA, []),
     )
 
-    assert result.schema == daily.DAILY_WEATHER_SCHEMA
+    assert result.schema == weather.DAILY_WEATHER_SCHEMA
     assert result["station_id"].to_list() == ["A", "B"]
     assert result["max_temperature_c"].to_list() == [24.0, None]
     assert result["precipitation_mm"].to_list() == [None, 1.5]

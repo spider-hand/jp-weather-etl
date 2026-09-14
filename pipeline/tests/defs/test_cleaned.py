@@ -122,16 +122,14 @@ def _raw_pollen_payload(*, pollen_types, plants):
     }
 
 
-def _cleaned_pollen_row(
-    *, pollen_code, pollen_value, plant_code=None, plant_value=None
-):
+def _cleaned_pollen_row(**pollen_info):
     return {
         "station_id": "11001",
         "date": date(2026, 9, 14),
-        "pollen_code": pollen_code,
-        "pollen_value": pollen_value,
-        "plant_code": plant_code,
-        "plant_value": plant_value,
+        "grass_info": None,
+        "tree_info": None,
+        "weed_info": None,
+        **pollen_info,
     }
 
 
@@ -163,49 +161,60 @@ def test_clean_pollen_requires_exactly_one_daily_record(daily_info):
             [{"code": "TREE", "indexInfo": {"value": 4}}],
             [
                 {
-                    "code": "ALDER",
-                    "indexInfo": {"value": 2},
-                    "plantDescription": {"type": "TREE"},
-                },
-                {
                     "code": "CYPRESS_PINE",
                     "indexInfo": {"value": 4},
                     "plantDescription": {"type": "TREE"},
                 },
+                {
+                    "code": "ALDER",
+                    "indexInfo": {"value": 2},
+                    "plantDescription": {"type": "TREE"},
+                },
             ],
-            [
-                _cleaned_pollen_row(
-                    pollen_code="TREE",
-                    pollen_value=4,
-                    plant_code="ALDER",
-                    plant_value=2,
-                ),
-                _cleaned_pollen_row(
-                    pollen_code="TREE",
-                    pollen_value=4,
-                    plant_code="CYPRESS_PINE",
-                    plant_value=4,
-                ),
-            ],
+            _cleaned_pollen_row(
+                tree_info={
+                    "value": 4,
+                    "plants": [
+                        {"code": "ALDER", "value": 2},
+                        {"code": "CYPRESS_PINE", "value": 4},
+                    ],
+                }
+            ),
             id="plant-values",
         ),
         pytest.param(
             [{"code": "TREE"}],
             [{"code": "ALDER", "plantDescription": {"type": "TREE"}}],
-            [
-                _cleaned_pollen_row(
-                    pollen_code="TREE",
-                    pollen_value=None,
-                    plant_code="ALDER",
-                )
-            ],
+            _cleaned_pollen_row(
+                tree_info={
+                    "value": None,
+                    "plants": [{"code": "ALDER", "value": None}],
+                }
+            ),
             id="missing-index-info",
         ),
         pytest.param(
             [{"code": "WEED", "indexInfo": {"value": 2}}],
             [],
-            [_cleaned_pollen_row(pollen_code="WEED", pollen_value=2)],
+            _cleaned_pollen_row(weed_info={"value": 2, "plants": []}),
             id="pollen-without-plants",
+        ),
+        pytest.param(
+            [],
+            [
+                {
+                    "code": "GRAMINALES",
+                    "indexInfo": {"value": 1},
+                    "plantDescription": {"type": "GRASS"},
+                }
+            ],
+            _cleaned_pollen_row(
+                grass_info={
+                    "value": None,
+                    "plants": [{"code": "GRAMINALES", "value": 1}],
+                }
+            ),
+            id="plant-only-group",
         ),
         pytest.param(
             [
@@ -227,16 +236,16 @@ def test_clean_pollen_requires_exactly_one_daily_record(daily_info):
                     "plantDescription": {"type": "TREE"},
                 },
             ],
-            [],
+            _cleaned_pollen_row(),
             id="unknown-codes",
         ),
         pytest.param(
             [{"code": "TREE", "indexInfo": {"value": 4}}],
             [{"code": "BIRCH", "indexInfo": {"value": 3}}],
-            [_cleaned_pollen_row(pollen_code="TREE", pollen_value=4)],
+            _cleaned_pollen_row(tree_info={"value": 4, "plants": []}),
             id="uncategorized-plant",
         ),
-        pytest.param([], [], [], id="empty-info"),
+        pytest.param([], [], _cleaned_pollen_row(), id="empty-info"),
     ],
 )
 def test_clean_pollen_response_patterns(pollen_types, plants, expected):
@@ -246,7 +255,35 @@ def test_clean_pollen_response_patterns(pollen_types, plants, expected):
     )
 
     assert result.schema == cleaned.POLLEN_SCHEMA
-    assert result.to_dicts() == expected
+    assert result.to_dicts() == [expected]
+
+
+@pytest.mark.parametrize(
+    ("pollen_types", "plants", "message"),
+    [
+        pytest.param(
+            [{"code": "TREE"}, {"code": "TREE"}],
+            [],
+            "Duplicate pollen type",
+            id="pollen-type",
+        ),
+        pytest.param(
+            [],
+            [
+                {"code": "ALDER", "plantDescription": {"type": "TREE"}},
+                {"code": "ALDER", "plantDescription": {"type": "TREE"}},
+            ],
+            "Duplicate plant",
+            id="plant",
+        ),
+    ],
+)
+def test_clean_pollen_rejects_duplicate_codes(pollen_types, plants, message):
+    with pytest.raises(ValueError, match=message):
+        cleaned._clean_pollen(
+            _raw_pollen_payload(pollen_types=pollen_types, plants=plants),
+            date(2026, 9, 14),
+        )
 
 
 @pytest.mark.parametrize(
@@ -278,14 +315,14 @@ def test_pollen_value_check(
     invalid_plant_count,
 ):
     frame = pl.DataFrame(
-        {
-            "station_id": ["11001"],
-            "date": [date(2026, 9, 14)],
-            "pollen_code": ["TREE"],
-            "pollen_value": [pollen_value],
-            "plant_code": ["ALDER"],
-            "plant_value": [plant_value],
-        },
+        [
+            _cleaned_pollen_row(
+                tree_info={
+                    "value": pollen_value,
+                    "plants": [{"code": "ALDER", "value": plant_value}],
+                }
+            )
+        ],
         schema=cleaned.POLLEN_SCHEMA,
     )
 

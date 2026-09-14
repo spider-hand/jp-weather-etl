@@ -1,11 +1,13 @@
 from datetime import datetime
+from io import BytesIO
 
+import polars as pl
 import pytest
 from dagster import DefaultScheduleStatus, Definitions
 
 from pipeline.defs import jobs, schedules
-from pipeline.defs.assets import cleaned, daily, raw, stations
-from pipeline.storage import RAW_BUCKET
+from pipeline.defs.assets import cleaned, processed, raw, stations, weather
+from pipeline.storage import PROCESSED_BUCKET, RAW_BUCKET
 
 COMMON_HEADERS = ["観測所番号", "都道府県", "地点", "国際地点番号"]
 COMMON_VALUES = ["11001", "北海道", "宗谷岬", ""]
@@ -73,8 +75,9 @@ def _definitions():
         assets=[
             *raw.RAW_ASSETS,
             *cleaned.CLEANED_ASSETS,
-            daily.daily_weather,
+            weather.daily_weather,
             stations.active_stations,
+            processed.daily_weather_conditions,
         ],
         asset_checks=cleaned.CLEANED_CHECKS,
         jobs=[jobs.weather_etl_job],
@@ -136,16 +139,27 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
         "precipitation_mm"
     ].to_list() == [0.0]
     daily_result = result.output_for_node("daily_weather")
-    assert daily_result.schema == daily.DAILY_WEATHER_SCHEMA
+    assert daily_result.schema == weather.DAILY_WEATHER_SCHEMA
     assert daily_result["precipitation_mm"].to_list() == [0.0]
     active_result = result.output_for_node("active_stations")
     assert active_result.schema == stations.ACTIVE_STATIONS_SCHEMA
     assert active_result["station_name"].to_list() == ["宗谷岬"]
     pollen_result = result.output_for_node("pollen_cleaned")
     assert pollen_result.schema == cleaned.POLLEN_SCHEMA
-    assert pollen_result.select(
-        "station_id", "pollen_code", "pollen_value", "plant_code", "plant_value"
-    ).row(0) == ("11001", "TREE", 4, "ALDER", 2)
+    assert pollen_result["tree_info"].to_list() == [
+        {"value": 4, "plants": [{"code": "ALDER", "value": 2}]}
+    ]
+
+    processed_object = s3_client.get_object(
+        Bucket=PROCESSED_BUCKET,
+        Key="20260913/daily_weather_conditions.parquet",
+    )
+    conditions = pl.read_parquet(BytesIO(processed_object["Body"].read()))
+    assert conditions.schema == processed.DAILY_WEATHER_CONDITIONS_SCHEMA
+    assert conditions.select("station_id", "station_name").row(0) == (
+        "11001",
+        "宗谷岬",
+    )
 
     objects = s3_client.list_objects_v2(Bucket=RAW_BUCKET).get("Contents", [])
     assert {item["Key"] for item in objects} == {
@@ -163,6 +177,7 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
     assert positions["daily_weather"] < positions["active_stations"]
     assert positions["active_stations"] < positions["pollen_raw"]
     assert positions["pollen_raw"] < positions["pollen_cleaned"]
+    assert positions["pollen_cleaned"] < positions["daily_weather_conditions"]
 
     evaluations = result.get_asset_check_evaluations()
     assert {evaluation.asset_key.to_user_string() for evaluation in evaluations} == {
@@ -214,9 +229,26 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
     assert pollen_metadata["source_object_key"].value == "20260913/pollen.json"
     assert pollen_metadata["observation_date"].value == "2026-09-13"
     assert pollen_metadata["row_count"].value == 1
-    assert pollen_metadata["column_count"].value == 6
-    assert pollen_metadata["null_pollen_value_count"].value == 0
-    assert pollen_metadata["null_plant_value_count"].value == 0
+    assert pollen_metadata["column_count"].value == 5
+    assert pollen_metadata["null_grass_info_count"].value == 1
+    assert pollen_metadata["null_tree_info_count"].value == 0
+    assert pollen_metadata["null_weed_info_count"].value == 1
+
+    conditions_event = next(
+        event
+        for event in events
+        if event.asset_key.to_user_string() == "daily_weather_conditions"
+    )
+    conditions_metadata = conditions_event.event_specific_data.materialization.metadata
+    assert conditions_metadata["destination_bucket"].value == PROCESSED_BUCKET
+    assert conditions_metadata["destination_object_key"].value == (
+        "20260913/daily_weather_conditions.parquet"
+    )
+    assert conditions_metadata["observation_date"].value == "2026-09-13"
+    assert conditions_metadata["row_count"].value == 1
+    assert conditions_metadata["column_count"].value == len(
+        processed.DAILY_WEATHER_CONDITIONS_SCHEMA
+    )
 
     schedule = schedules.weather_etl_schedule
     assert schedule.cron_schedule == "30 23 * * *"
