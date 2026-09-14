@@ -76,7 +76,7 @@ def _definitions():
             daily.daily_weather,
             stations.active_stations,
         ],
-        asset_checks=cleaned.CLEANED_KEY_CHECKS,
+        asset_checks=cleaned.CLEANED_CHECKS,
         jobs=[jobs.weather_etl_job],
         schedules=[schedules.weather_etl_schedule],
     )
@@ -96,7 +96,21 @@ def _mock_inputs(monkeypatch, tmp_path, payloads):
         "_download_pollen_response",
         lambda *_args: {
             "regionCode": "JP",
-            "dailyInfo": [{"date": {"year": 2026, "month": 9, "day": 13}}],
+            "dailyInfo": [
+                {
+                    "date": {"year": 2026, "month": 9, "day": 13},
+                    "pollenTypeInfo": [
+                        {"code": "TREE", "indexInfo": {"value": 4}}
+                    ],
+                    "plantInfo": [
+                        {
+                            "code": "ALDER",
+                            "indexInfo": {"value": 2},
+                            "plantDescription": {"type": "TREE"},
+                        }
+                    ],
+                }
+            ],
         },
     )
     station_master_path = tmp_path / "station_master.csv"
@@ -127,6 +141,11 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
     active_result = result.output_for_node("active_stations")
     assert active_result.schema == stations.ACTIVE_STATIONS_SCHEMA
     assert active_result["station_name"].to_list() == ["宗谷岬"]
+    pollen_result = result.output_for_node("pollen_cleaned")
+    assert pollen_result.schema == cleaned.POLLEN_SCHEMA
+    assert pollen_result.select(
+        "station_id", "pollen_code", "pollen_value", "plant_code", "plant_value"
+    ).row(0) == ("11001", "TREE", 4, "ALDER", 2)
 
     objects = s3_client.list_objects_v2(Bucket=RAW_BUCKET).get("Contents", [])
     assert {item["Key"] for item in objects} == {
@@ -143,13 +162,15 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
         assert positions[cleaned_name] < positions["daily_weather"]
     assert positions["daily_weather"] < positions["active_stations"]
     assert positions["active_stations"] < positions["pollen_raw"]
+    assert positions["pollen_raw"] < positions["pollen_cleaned"]
 
     evaluations = result.get_asset_check_evaluations()
     assert {evaluation.asset_key.to_user_string() for evaluation in evaluations} == {
-        asset.key.to_user_string() for asset in cleaned.CLEANED_ASSETS
-    }
+        raw_name.removesuffix("_raw") + "_cleaned" for raw_name in raw.RAW_FILES
+    } | {"pollen_cleaned"}
     assert {evaluation.check_name for evaluation in evaluations} == {
-        "valid_daily_weather_key"
+        "valid_daily_weather_key",
+        "valid_pollen_values",
     }
     assert all(evaluation.passed for evaluation in evaluations)
 
@@ -183,6 +204,19 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
     assert active_metadata["row_count"].value == 1
     assert active_metadata["column_count"].value == 4
     assert active_metadata["duplicate_station_count"].value == 0
+
+    pollen_event = next(
+        event
+        for event in events
+        if event.asset_key.to_user_string() == "pollen_cleaned"
+    )
+    pollen_metadata = pollen_event.event_specific_data.materialization.metadata
+    assert pollen_metadata["source_object_key"].value == "20260913/pollen.json"
+    assert pollen_metadata["observation_date"].value == "2026-09-13"
+    assert pollen_metadata["row_count"].value == 1
+    assert pollen_metadata["column_count"].value == 6
+    assert pollen_metadata["null_pollen_value_count"].value == 0
+    assert pollen_metadata["null_plant_value_count"].value == 0
 
     schedule = schedules.weather_etl_schedule
     assert schedule.cron_schedule == "30 23 * * *"

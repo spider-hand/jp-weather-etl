@@ -104,6 +104,198 @@ def test_missing_measurement_is_null_but_zero_is_preserved():
     assert result.height == 2
 
 
+def _raw_pollen_payload(*, pollen_types, plants):
+    return {
+        "results": [
+            {
+                "station_id": "11001",
+                "response": {
+                    "dailyInfo": [
+                        {
+                            "pollenTypeInfo": pollen_types,
+                            "plantInfo": plants,
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+
+def _cleaned_pollen_row(
+    *, pollen_code, pollen_value, plant_code=None, plant_value=None
+):
+    return {
+        "station_id": "11001",
+        "date": date(2026, 9, 14),
+        "pollen_code": pollen_code,
+        "pollen_value": pollen_value,
+        "plant_code": plant_code,
+        "plant_value": plant_value,
+    }
+
+
+def test_clean_pollen_requires_results_list():
+    with pytest.raises(TypeError, match="results list"):
+        cleaned._clean_pollen({}, date(2026, 9, 14))
+
+
+@pytest.mark.parametrize(
+    "daily_info",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param([], id="empty"),
+        pytest.param([{}, {}], id="multiple"),
+    ],
+)
+def test_clean_pollen_requires_exactly_one_daily_record(daily_info):
+    payload = _raw_pollen_payload(pollen_types=[], plants=[])
+    payload["results"][0]["response"]["dailyInfo"] = daily_info
+
+    with pytest.raises(ValueError, match="exactly one pollen forecast day"):
+        cleaned._clean_pollen(payload, date(2026, 9, 14))
+
+
+@pytest.mark.parametrize(
+    ("pollen_types", "plants", "expected"),
+    [
+        pytest.param(
+            [{"code": "TREE", "indexInfo": {"value": 4}}],
+            [
+                {
+                    "code": "ALDER",
+                    "indexInfo": {"value": 2},
+                    "plantDescription": {"type": "TREE"},
+                },
+                {
+                    "code": "CYPRESS_PINE",
+                    "indexInfo": {"value": 4},
+                    "plantDescription": {"type": "TREE"},
+                },
+            ],
+            [
+                _cleaned_pollen_row(
+                    pollen_code="TREE",
+                    pollen_value=4,
+                    plant_code="ALDER",
+                    plant_value=2,
+                ),
+                _cleaned_pollen_row(
+                    pollen_code="TREE",
+                    pollen_value=4,
+                    plant_code="CYPRESS_PINE",
+                    plant_value=4,
+                ),
+            ],
+            id="plant-values",
+        ),
+        pytest.param(
+            [{"code": "TREE"}],
+            [{"code": "ALDER", "plantDescription": {"type": "TREE"}}],
+            [
+                _cleaned_pollen_row(
+                    pollen_code="TREE",
+                    pollen_value=None,
+                    plant_code="ALDER",
+                )
+            ],
+            id="missing-index-info",
+        ),
+        pytest.param(
+            [{"code": "WEED", "indexInfo": {"value": 2}}],
+            [],
+            [_cleaned_pollen_row(pollen_code="WEED", pollen_value=2)],
+            id="pollen-without-plants",
+        ),
+        pytest.param(
+            [
+                {
+                    "code": "POLLEN_TYPE_UNSPECIFIED",
+                    "indexInfo": {"value": 5},
+                },
+                {"code": "NEW_TYPE", "indexInfo": {"value": 5}},
+            ],
+            [
+                {
+                    "code": "PLANT_UNSPECIFIED",
+                    "indexInfo": {"value": 3},
+                    "plantDescription": {"type": "TREE"},
+                },
+                {
+                    "code": "NEW_PLANT",
+                    "indexInfo": {"value": 3},
+                    "plantDescription": {"type": "TREE"},
+                },
+            ],
+            [],
+            id="unknown-codes",
+        ),
+        pytest.param(
+            [{"code": "TREE", "indexInfo": {"value": 4}}],
+            [{"code": "BIRCH", "indexInfo": {"value": 3}}],
+            [_cleaned_pollen_row(pollen_code="TREE", pollen_value=4)],
+            id="uncategorized-plant",
+        ),
+        pytest.param([], [], [], id="empty-info"),
+    ],
+)
+def test_clean_pollen_response_patterns(pollen_types, plants, expected):
+    result = cleaned._clean_pollen(
+        _raw_pollen_payload(pollen_types=pollen_types, plants=plants),
+        date(2026, 9, 14),
+    )
+
+    assert result.schema == cleaned.POLLEN_SCHEMA
+    assert result.to_dicts() == expected
+
+
+@pytest.mark.parametrize(
+    (
+        "pollen_value",
+        "plant_value",
+        "expected_passed",
+        "invalid_pollen_count",
+        "invalid_plant_count",
+    ),
+    [
+        pytest.param(None, 2, True, 0, 0, id="pollen-null"),
+        pytest.param(0, 2, True, 0, 0, id="pollen-min"),
+        pytest.param(5, 2, True, 0, 0, id="pollen-max"),
+        pytest.param(-1, 2, False, 1, 0, id="pollen-below-min"),
+        pytest.param(6, 2, False, 1, 0, id="pollen-above-max"),
+        pytest.param(2, None, True, 0, 0, id="plant-null"),
+        pytest.param(2, 0, True, 0, 0, id="plant-min"),
+        pytest.param(2, 5, True, 0, 0, id="plant-max"),
+        pytest.param(2, -1, False, 0, 1, id="plant-below-min"),
+        pytest.param(2, 6, False, 0, 1, id="plant-above-max"),
+    ],
+)
+def test_pollen_value_check(
+    pollen_value,
+    plant_value,
+    expected_passed,
+    invalid_pollen_count,
+    invalid_plant_count,
+):
+    frame = pl.DataFrame(
+        {
+            "station_id": ["11001"],
+            "date": [date(2026, 9, 14)],
+            "pollen_code": ["TREE"],
+            "pollen_value": [pollen_value],
+            "plant_code": ["ALDER"],
+            "plant_value": [plant_value],
+        },
+        schema=cleaned.POLLEN_SCHEMA,
+    )
+
+    result = cleaned._valid_pollen_values(frame)
+
+    assert result.passed is expected_passed
+    assert result.metadata["invalid_pollen_value_count"].value == invalid_pollen_count
+    assert result.metadata["invalid_plant_value_count"].value == invalid_plant_count
+
+
 @pytest.mark.parametrize(
     ("columns", "expected"),
     [

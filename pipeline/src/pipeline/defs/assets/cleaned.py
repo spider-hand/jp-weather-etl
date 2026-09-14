@@ -1,10 +1,12 @@
-"""Parse raw JMA CSV objects into stable, typed DataFrames."""
+"""Parse raw source objects into stable, typed DataFrames."""
 
+import json
 import re
 from collections.abc import Callable
 from datetime import date
+from enum import Enum
 from io import StringIO
-from typing import Final
+from typing import Any, Final
 
 import polars as pl
 from dagster import (
@@ -55,6 +57,42 @@ COMMON_SCHEMA: Final = {
     "station_id": pl.String,
     "date": pl.Date,
 }
+
+
+# @see: https://developers.google.com/maps/documentation/pollen/reference/rest/v1/forecast/lookup#PollenType
+class PollenType(str, Enum):
+    POLLEN_TYPE_UNSPECIFIED = "POLLEN_TYPE_UNSPECIFIED"
+    GRASS = "GRASS"
+    TREE = "TREE"
+    WEED = "WEED"
+
+
+# @see: https://developers.google.com/maps/documentation/pollen/reference/rest/v1/forecast/lookup#Plant
+class Plant(str, Enum):
+    PLANT_UNSPECIFIED = "PLANT_UNSPECIFIED"
+    ALDER = "ALDER"
+    ASH = "ASH"
+    BIRCH = "BIRCH"
+    COTTONWOOD = "COTTONWOOD"
+    ELM = "ELM"
+    MAPLE = "MAPLE"
+    OLIVE = "OLIVE"
+    JUNIPER = "JUNIPER"
+    OAK = "OAK"
+    PINE = "PINE"
+    CYPRESS_PINE = "CYPRESS_PINE"
+    HAZEL = "HAZEL"
+    GRAMINALES = "GRAMINALES"
+    RAGWEED = "RAGWEED"
+    MUGWORT = "MUGWORT"
+
+
+POLLEN_TYPES: Final = tuple(
+    item.value for item in PollenType if item is not PollenType.POLLEN_TYPE_UNSPECIFIED
+)
+PLANTS: Final = tuple(
+    item.value for item in Plant if item is not Plant.PLANT_UNSPECIFIED
+)
 PRECIPITATION_SCHEMA: Final = pl.Schema(
     COMMON_SCHEMA
     | {
@@ -94,12 +132,23 @@ MAX_GUST_SCHEMA: Final = pl.Schema(
         "max_gust_direction_quality": pl.Int64,
     }
 )
+POLLEN_SCHEMA: Final = pl.Schema(
+    {
+        "station_id": pl.String,
+        "date": pl.Date,
+        "pollen_code": pl.Enum(POLLEN_TYPES),
+        "pollen_value": pl.Int64,
+        "plant_code": pl.Enum(PLANTS),
+        "plant_value": pl.Int64,
+    }
+)
 CLEANED_SCHEMAS: Final = {
     "precipitation_cleaned": PRECIPITATION_SCHEMA,
     "max_temperature_cleaned": MAX_TEMPERATURE_SCHEMA,
     "min_temperature_cleaned": MIN_TEMPERATURE_SCHEMA,
     "max_wind_cleaned": MAX_WIND_SCHEMA,
     "max_gust_cleaned": MAX_GUST_SCHEMA,
+    "pollen_cleaned": POLLEN_SCHEMA,
 }
 
 
@@ -152,6 +201,17 @@ def _read_raw_csv(object_key: str) -> pl.DataFrame:
     finally:
         body.close()
     return pl.read_csv(StringIO(payload.decode("shift_jis")), infer_schema=False)
+
+
+def _read_raw_json(object_key: str) -> dict[str, Any]:
+    body = create_s3_client().get_object(Bucket=RAW_BUCKET, Key=object_key)["Body"]
+    try:
+        payload = json.load(body)
+    finally:
+        body.close()
+    if not isinstance(payload, dict):
+        raise TypeError("Raw JSON payload must be an object")
+    return payload
 
 
 def _text(source: str, target: str) -> pl.Expr:
@@ -225,6 +285,67 @@ def _clean_max_gust(frame: pl.DataFrame, observation_date: date) -> pl.DataFrame
         _text(direction, "max_gust_direction"),
         _text(direction_quality, "max_gust_direction_quality"),
     ).cast(MAX_GUST_SCHEMA, strict=True)
+
+
+def _clean_pollen(payload: dict[str, Any], observation_date: date) -> pl.DataFrame:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise TypeError("Pollen payload must contain a results list")
+
+    rows = []
+    for result in results:
+        station_id = result["station_id"]
+        response = result["response"]
+        daily_info = response.get("dailyInfo")
+        if not isinstance(daily_info, list) or len(daily_info) != 1:
+            raise ValueError(
+                f"Expected exactly one pollen forecast day for station {station_id!r}"
+            )
+
+        day = daily_info[0]
+        # Ignore unknown and unspecified pollen codes; keep missing values as null.
+        pollen_values = {
+            item["code"]: (item.get("indexInfo") or {}).get("value")
+            for item in day.get("pollenTypeInfo", [])
+            if item.get("code") in POLLEN_TYPES
+        }
+        codes_with_plants = set()
+        for plant in day.get("plantInfo", []):
+            plant_code = plant.get("code")
+            description = plant.get("plantDescription") or {}
+            pollen_code = description.get("type")
+            # A plant needs both a documented code and a documented pollen group.
+            if plant_code not in PLANTS or pollen_code not in POLLEN_TYPES:
+                continue
+            codes_with_plants.add(pollen_code)
+            rows.append(
+                {
+                    "station_id": station_id,
+                    "date": observation_date,
+                    "pollen_code": pollen_code,
+                    "pollen_value": pollen_values.get(pollen_code),
+                    "plant_code": plant_code,
+                    "plant_value": (plant.get("indexInfo") or {}).get("value"),
+                }
+            )
+
+        # Preserve a valid type-level value even when it has no valid plant rows.
+        for pollen_code, pollen_value in pollen_values.items():
+            if pollen_code not in codes_with_plants:
+                rows.append(
+                    {
+                        "station_id": station_id,
+                        "date": observation_date,
+                        "pollen_code": pollen_code,
+                        "pollen_value": pollen_value,
+                        "plant_code": None,
+                        "plant_value": None,
+                    }
+                )
+
+    return pl.DataFrame(rows, schema=POLLEN_SCHEMA).sort(
+        "station_id", "pollen_code", "plant_code", nulls_last=True
+    )
 
 
 def _materialize_cleaned(
@@ -303,12 +424,30 @@ def max_gust_cleaned(context: AssetExecutionContext) -> pl.DataFrame:
     )
 
 
+@asset(group_name="cleaned", deps=[AssetKey("pollen_raw")])
+def pollen_cleaned(context: AssetExecutionContext) -> pl.DataFrame:
+    object_key, observation_date = _source_object(context, "pollen_raw", "pollen.json")
+    cleaned = _clean_pollen(_read_raw_json(object_key), observation_date)
+    context.add_output_metadata(
+        {
+            "row_count": cleaned.height,
+            "column_count": cleaned.width,
+            "source_object_key": object_key,
+            "observation_date": observation_date.isoformat(),
+            "null_pollen_value_count": cleaned["pollen_value"].null_count(),
+            "null_plant_value_count": cleaned["plant_value"].null_count(),
+        }
+    )
+    return cleaned
+
+
 CLEANED_ASSETS = [
     precipitation_cleaned,
     max_temperature_cleaned,
     min_temperature_cleaned,
     max_wind_cleaned,
     max_gust_cleaned,
+    pollen_cleaned,
 ]
 
 JOIN_KEYS = ["station_id", "date"]
@@ -326,6 +465,22 @@ def _valid_daily_weather_key(frame: pl.DataFrame) -> AssetCheckResult:
         metadata={
             "null_key_row_count": null_key_row_count,
             "duplicate_key_count": duplicate_key_count,
+        },
+    )
+
+
+def _valid_pollen_values(frame: pl.DataFrame) -> AssetCheckResult:
+    invalid_pollen_value_count = frame.filter(
+        pl.col("pollen_value").is_not_null() & ~pl.col("pollen_value").is_between(0, 5)
+    ).height
+    invalid_plant_value_count = frame.filter(
+        pl.col("plant_value").is_not_null() & ~pl.col("plant_value").is_between(0, 5)
+    ).height
+    return AssetCheckResult(
+        passed=invalid_pollen_value_count == 0 and invalid_plant_value_count == 0,
+        metadata={
+            "invalid_pollen_value_count": invalid_pollen_value_count,
+            "invalid_plant_value_count": invalid_plant_value_count,
         },
     )
 
@@ -385,6 +540,17 @@ def max_gust_cleaned_valid_daily_weather_key(
     return _valid_daily_weather_key(max_gust_cleaned)
 
 
+@asset_check(
+    asset=pollen_cleaned,
+    name="valid_pollen_values",
+    blocking=True,
+)
+def pollen_cleaned_valid_pollen_values(
+    pollen_cleaned: pl.DataFrame,
+) -> AssetCheckResult:
+    return _valid_pollen_values(pollen_cleaned)
+
+
 CLEANED_KEY_CHECKS = [
     precipitation_cleaned_valid_daily_weather_key,
     max_temperature_cleaned_valid_daily_weather_key,
@@ -392,3 +558,5 @@ CLEANED_KEY_CHECKS = [
     max_wind_cleaned_valid_daily_weather_key,
     max_gust_cleaned_valid_daily_weather_key,
 ]
+
+CLEANED_CHECKS = [*CLEANED_KEY_CHECKS, pollen_cleaned_valid_pollen_values]

@@ -14,6 +14,7 @@ WEATHER_ASSET_KEYS = (
     "daily_weather",
     "active_stations",
     "pollen_raw",
+    "pollen_cleaned",
 )
 
 weather_etl_job = define_asset_job(
