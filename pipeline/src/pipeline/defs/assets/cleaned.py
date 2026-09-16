@@ -3,10 +3,11 @@
 import json
 import re
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime, timedelta
 from enum import Enum
 from io import StringIO
 from typing import Any, Final
+from zoneinfo import ZoneInfo
 
 import polars as pl
 from dagster import (
@@ -23,9 +24,17 @@ from pipeline.storage import RAW_BUCKET, create_s3_client
 COMMON_COLUMN_MAPPING: Final = {
     "観測所番号": "station_id",
 }
+JMA_TIMESTAMP_COLUMNS: Final = {
+    "year": "現在時刻(年)",
+    "month": "現在時刻(月)",
+    "day": "現在時刻(日)",
+    "hour": "現在時刻(時)",
+    "minute": "現在時刻(分)",
+}
+JST: Final = ZoneInfo("Asia/Tokyo")
+OBSERVED_AT_DTYPE: Final = pl.Datetime("us", time_zone="Asia/Tokyo")
 
-# JMA column names use the observation day in place of ``{day}``.
-# ``date`` is derived from the Raw object key rather than a JMA CSV column.
+# JMA measurement column names use the observation day in place of ``{day}``.
 COLUMN_MAPPINGS: Final = {
     "precipitation_cleaned": {
         "{day}日の値(mm)": "precipitation_mm",
@@ -56,6 +65,7 @@ COLUMN_MAPPINGS: Final = {
 COMMON_SCHEMA: Final = {
     "station_id": pl.String,
     "date": pl.Date,
+    "observed_at": OBSERVED_AT_DTYPE,
 }
 
 
@@ -234,44 +244,76 @@ def _text(source: str, target: str) -> pl.Expr:
     return pl.col(source).str.strip_chars().replace("", None).alias(target)
 
 
-def _common(observation_date: date) -> list[pl.Expr]:
+def _observation_time(frame: pl.DataFrame) -> tuple[date, datetime]:
+    timestamps = frame.select(
+        *(
+            pl.col(source).str.strip_chars().alias(name)
+            for name, source in JMA_TIMESTAMP_COLUMNS.items()
+        )
+    ).unique()
+    if timestamps.height != 1:
+        raise ValueError("Expected one JMA timestamp")
+
+    try:
+        parts = {
+            name: int(value) for name, value in timestamps.row(0, named=True).items()
+        }
+        observation_date = date(parts["year"], parts["month"], parts["day"])
+    except (TypeError, ValueError) as error:
+        raise ValueError("Invalid JMA timestamp") from error
+
+    hour = parts["hour"]
+    minute = parts["minute"]
+    if not 0 <= hour <= 24 or not 0 <= minute <= 59 or (hour == 24 and minute):
+        raise ValueError("Invalid JMA timestamp")
+    # JMA supplies JST wall-clock values. Attach JST; do not convert from another zone.
+    observed_at = datetime(
+        parts["year"], parts["month"], parts["day"], tzinfo=JST
+    ) + timedelta(hours=hour, minutes=minute)
+    observed_at = observed_at.replace(minute=0)
+    return observation_date, observed_at
+
+
+def _common(frame: pl.DataFrame) -> list[pl.Expr]:
+    observation_date, observed_at = _observation_time(frame)
     return [
         *(_text(source, target) for source, target in COMMON_COLUMN_MAPPING.items()),
         pl.lit(observation_date, dtype=pl.Date).alias("date"),
+        pl.lit(observed_at, dtype=OBSERVED_AT_DTYPE).alias("observed_at"),
     ]
 
 
-def _clean_precipitation(frame: pl.DataFrame, observation_date: date) -> pl.DataFrame:
+def _clean_precipitation(frame: pl.DataFrame) -> pl.DataFrame:
     value = find_column(frame.columns, r"\d{1,2}日の値\(mm\)")
     quality = find_column(frame.columns, r"\d{1,2}日の値の品質情報")
     return frame.select(
-        *_common(observation_date),
+        *_common(frame),
         _text(value, "precipitation_mm"),
         _text(quality, "precipitation_quality"),
     ).cast(PRECIPITATION_SCHEMA, strict=True)
 
 
-def _clean_max_temperature(frame: pl.DataFrame, observation_date: date) -> pl.DataFrame:
+def _clean_max_temperature(frame: pl.DataFrame) -> pl.DataFrame:
     value = find_column(frame.columns, r"\d{1,2}日の最高気温\(℃\)")
     quality = find_column(frame.columns, r"\d{1,2}日の最高気温の品質情報")
     return frame.select(
-        *_common(observation_date),
+        *_common(frame),
         _text(value, "max_temperature_c"),
         _text(quality, "max_temperature_quality"),
     ).cast(MAX_TEMPERATURE_SCHEMA, strict=True)
 
 
-def _clean_min_temperature(frame: pl.DataFrame, observation_date: date) -> pl.DataFrame:
+def _clean_min_temperature(frame: pl.DataFrame) -> pl.DataFrame:
     value = find_column(frame.columns, r"\d{1,2}日の最低気温\(℃\)")
     quality = find_column(frame.columns, r"\d{1,2}日の最低気温の品質情報")
     return frame.select(
-        *_common(observation_date),
+        *_common(frame),
         _text(value, "min_temperature_c"),
         _text(quality, "min_temperature_quality"),
     ).cast(MIN_TEMPERATURE_SCHEMA, strict=True)
 
 
-def _clean_max_wind(frame: pl.DataFrame, observation_date: date) -> pl.DataFrame:
+def _clean_max_wind(frame: pl.DataFrame) -> pl.DataFrame:
     value = find_column(frame.columns, r"\d{1,2}日の最大値\(m/s\)")
     quality = find_column(frame.columns, r"\d{1,2}日の最大値の品質情報")
     direction = find_column(frame.columns, r"\d{1,2}日の最大値観測時の風向")
@@ -279,7 +321,7 @@ def _clean_max_wind(frame: pl.DataFrame, observation_date: date) -> pl.DataFrame
         frame.columns, r"\d{1,2}日の最大値観測時の風向の品質情報"
     )
     return frame.select(
-        *_common(observation_date),
+        *_common(frame),
         _text(value, "max_wind_speed_ms"),
         _text(quality, "max_wind_quality"),
         _text(direction, "max_wind_direction"),
@@ -287,7 +329,7 @@ def _clean_max_wind(frame: pl.DataFrame, observation_date: date) -> pl.DataFrame
     ).cast(MAX_WIND_SCHEMA, strict=True)
 
 
-def _clean_max_gust(frame: pl.DataFrame, observation_date: date) -> pl.DataFrame:
+def _clean_max_gust(frame: pl.DataFrame) -> pl.DataFrame:
     value = find_column(frame.columns, r"\d{1,2}日の最大値\(m/s\)")
     quality = find_column(frame.columns, r"\d{1,2}日の最大値の品質情報")
     direction = find_column(frame.columns, r"\d{1,2}日の最大値観測時の風向")
@@ -295,7 +337,7 @@ def _clean_max_gust(frame: pl.DataFrame, observation_date: date) -> pl.DataFrame
         frame.columns, r"\d{1,2}日の最大値観測時の風向の品質情報"
     )
     return frame.select(
-        *_common(observation_date),
+        *_common(frame),
         _text(value, "max_gust_speed_ms"),
         _text(quality, "max_gust_quality"),
         _text(direction, "max_gust_direction"),
@@ -378,17 +420,20 @@ def _materialize_cleaned(
     context: AssetExecutionContext,
     raw_asset: str,
     filename: str,
-    transform: Callable[[pl.DataFrame, date], pl.DataFrame],
+    transform: Callable[[pl.DataFrame], pl.DataFrame],
     measurement: str,
 ) -> pl.DataFrame:
-    object_key, observation_date = _source_object(context, raw_asset, filename)
-    cleaned = transform(_read_raw_csv(object_key), observation_date)
+    object_key, _ = _source_object(context, raw_asset, filename)
+    cleaned = transform(_read_raw_csv(object_key))
+    observation_date = cleaned["date"].item(0)
+    observed_at = cleaned["observed_at"].item(0)
     context.add_output_metadata(
         {
             "row_count": cleaned.height,
             "column_count": cleaned.width,
             "source_object_key": object_key,
             "observation_date": observation_date.isoformat(),
+            "observed_at": observed_at.isoformat(),
             "null_count": cleaned[measurement].null_count(),
         }
     )
@@ -482,17 +527,34 @@ JOIN_KEYS = ["station_id", "date"]
 
 
 def _valid_daily_weather_key(frame: pl.DataFrame) -> AssetCheckResult:
+    required_columns = [
+        *JOIN_KEYS,
+        *(["observed_at"] if "observed_at" in frame.columns else []),
+    ]
     null_key_row_count = frame.filter(
-        pl.any_horizontal(*(pl.col(column).is_null() for column in JOIN_KEYS))
+        pl.any_horizontal(*(pl.col(column).is_null() for column in required_columns))
     ).height
     duplicate_key_count = (
         frame.group_by(JOIN_KEYS).len().filter(pl.col("len") > 1).height
     )
+    date_count = frame["date"].drop_nulls().n_unique()
+    observed_at_count = (
+        frame["observed_at"].drop_nulls().n_unique()
+        if "observed_at" in frame.columns
+        else 1
+    )
     return AssetCheckResult(
-        passed=null_key_row_count == 0 and duplicate_key_count == 0,
+        passed=(
+            null_key_row_count == 0
+            and duplicate_key_count == 0
+            and date_count == 1
+            and observed_at_count == 1
+        ),
         metadata={
             "null_key_row_count": null_key_row_count,
             "duplicate_key_count": duplicate_key_count,
+            "date_count": date_count,
+            "observed_at_count": observed_at_count,
         },
     )
 

@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 from io import StringIO
+from zoneinfo import ZoneInfo
 
 import polars as pl
 import pytest
@@ -7,15 +8,27 @@ from dagster import DagsterEventType, materialize
 
 from pipeline.defs.assets import cleaned
 
-COMMON_HEADERS = ["観測所番号", "都道府県", "地点", "国際地点番号"]
-COMMON_VALUES = ["11001", "北海道", "宗谷岬", ""]
+COMMON_HEADERS = [
+    "観測所番号",
+    "都道府県",
+    "地点",
+    "国際地点番号",
+    "現在時刻(年)",
+    "現在時刻(月)",
+    "現在時刻(日)",
+    "現在時刻(時)",
+    "現在時刻(分)",
+]
+COMMON_VALUES = ["11001", "北海道", "宗谷岬", "", "2026", "09", "13", "14", "00"]
+JST = ZoneInfo("Asia/Tokyo")
 
 
-def _frame(headers, values):
+def _frame(headers, values, common_values=None):
+    common_values = common_values or COMMON_VALUES
     csv = (
         ",".join([*COMMON_HEADERS, *headers])
         + "\n"
-        + ",".join([*COMMON_VALUES, *values])
+        + ",".join([*common_values, *values])
     )
     return pl.read_csv(StringIO(csv), infer_schema=False)
 
@@ -84,10 +97,12 @@ def _frame(headers, values):
     ],
 )
 def test_cleaned_schemas(transform, headers, values, expected_schema):
-    result = transform(_frame(headers, values), date(2026, 9, 13))
+    result = transform(_frame(headers, values))
 
     assert result.schema == expected_schema
     assert result["date"].to_list() == [date(2026, 9, 13)]
+    assert result["observed_at"].to_list() == [datetime(2026, 9, 13, 14, tzinfo=JST)]
+    assert "source_observed_at" not in result.columns
 
 
 def test_missing_measurement_is_null_but_zero_is_preserved():
@@ -98,10 +113,74 @@ def test_missing_measurement_is_null_but_zero_is_preserved():
         ]
     )
 
-    result = cleaned._clean_precipitation(frame, date(2026, 9, 13))
+    result = cleaned._clean_precipitation(frame)
 
     assert result["precipitation_mm"].to_list() == [None, 0.0]
     assert result.height == 2
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "expected"),
+    [
+        pytest.param("14", minute, datetime(2026, 9, 13, 14, tzinfo=JST), id=minute)
+        for minute in ("00", "10", "20", "30", "40", "50")
+    ]
+    + [pytest.param("15", "00", datetime(2026, 9, 13, 15, tzinfo=JST), id="next-hour")],
+)
+def test_precipitation_observed_at_is_floored_to_hour(hour, minute, expected):
+    common_values = [*COMMON_VALUES[:7], hour, minute]
+
+    result = cleaned._clean_precipitation(
+        _frame(
+            ["13日の値(mm)", "13日の値の品質情報"],
+            ["0.0", "5"],
+            common_values,
+        )
+    )
+
+    assert result["observed_at"].to_list() == [expected]
+
+
+def test_observed_at_supports_jma_24_hour_notation():
+    result = cleaned._clean_precipitation(
+        _frame(
+            ["13日の値(mm)", "13日の値の品質情報"],
+            ["0.0", "5"],
+            [*COMMON_VALUES[:7], "24", "00"],
+        )
+    )
+
+    assert result["date"].to_list() == [date(2026, 9, 13)]
+    assert result["observed_at"].to_list() == [datetime(2026, 9, 14, 0, tzinfo=JST)]
+
+
+def test_temperature_observed_at_is_also_floored_to_hour():
+    frame = _frame(
+        ["13日の最高気温(℃)", "13日の最高気温の品質情報"],
+        ["26.3", "4"],
+        [*COMMON_VALUES[:8], "10"],
+    )
+
+    result = cleaned._clean_max_temperature(frame)
+
+    assert result["observed_at"].to_list() == [datetime(2026, 9, 13, 14, tzinfo=JST)]
+
+
+def test_cleaned_weather_rejects_multiple_source_timestamps():
+    fourteen_fifty = _frame(
+        ["13日の値(mm)", "13日の値の品質情報"],
+        ["0.0", "5"],
+        [*COMMON_VALUES[:7], "14", "50"],
+    )
+    fifteen_oclock = _frame(
+        ["13日の値(mm)", "13日の値の品質情報"],
+        ["0.0", "5"],
+        [*COMMON_VALUES[:7], "15", "00"],
+    )
+    frame = pl.concat([fourteen_fifty, fifteen_oclock])
+
+    with pytest.raises(ValueError, match="one JMA timestamp"):
+        cleaned._clean_precipitation(frame)
 
 
 def _raw_pollen_payload(*, pollen_types, plants):

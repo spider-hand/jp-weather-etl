@@ -9,6 +9,7 @@ DAILY_WEATHER_SCHEMA: Final = pl.Schema(
     {
         "station_id": pl.String,
         "date": pl.Date,
+        "observed_at": pl.Datetime("us", time_zone="Asia/Tokyo"),
         "precipitation_mm": pl.Float64,
         "precipitation_quality": pl.Int64,
         "max_temperature_c": pl.Float64,
@@ -36,19 +37,31 @@ def _merge_daily_weather(
     max_wind_cleaned: pl.DataFrame,
     max_gust_cleaned: pl.DataFrame,
 ) -> pl.DataFrame:
-    result = precipitation_cleaned
-    for frame in (
+    frames = (
+        precipitation_cleaned,
         max_temperature_cleaned,
         min_temperature_cleaned,
         max_wind_cleaned,
         max_gust_cleaned,
-    ):
-        result = result.join(frame, on=JOIN_KEYS, how="full", coalesce=True)
+    )
+    if len({frame["date"][0] for frame in frames}) != 1:
+        raise ValueError("daily_weather requires one shared observation date")
+    observed_at = min(frame["observed_at"][0] for frame in frames)
+    result = precipitation_cleaned.drop("observed_at")
+    for frame in frames[1:]:
+        result = result.join(
+            frame.drop("observed_at"), on=JOIN_KEYS, how="full", coalesce=True
+        )
 
     return (
-        result.select(DAILY_WEATHER_SCHEMA.names())
+        result.with_columns(
+            pl.lit(observed_at, dtype=DAILY_WEATHER_SCHEMA["observed_at"]).alias(
+                "observed_at"
+            )
+        )
+        .select(DAILY_WEATHER_SCHEMA.names())
         .cast(DAILY_WEATHER_SCHEMA, strict=True)
-        .sort(JOIN_KEYS)
+        .sort([*JOIN_KEYS, "observed_at"])
     )
 
 
@@ -61,17 +74,40 @@ def daily_weather(
     max_wind_cleaned: pl.DataFrame,
     max_gust_cleaned: pl.DataFrame,
 ) -> pl.DataFrame:
-    result = _merge_daily_weather(
+    frames = (
         precipitation_cleaned,
         max_temperature_cleaned,
         min_temperature_cleaned,
         max_wind_cleaned,
         max_gust_cleaned,
     )
+    result = _merge_daily_weather(
+        *frames,
+    )
+    source_hours = {
+        "precipitation": precipitation_cleaned["observed_at"][0],
+        "max_temperature": max_temperature_cleaned["observed_at"][0],
+        "min_temperature": min_temperature_cleaned["observed_at"][0],
+        "max_wind": max_wind_cleaned["observed_at"][0],
+        "max_gust": max_gust_cleaned["observed_at"][0],
+    }
+    observation_date = result["date"][0]
+    observed_at = result["observed_at"][0]
+    if len(set(source_hours.values())) > 1:
+        context.log.warning(
+            "JMA source observed_at values differ; using the oldest hour: "
+            f"{observed_at.isoformat()}"
+        )
     context.add_output_metadata(
         {
             "row_count": result.height,
             "column_count": result.width,
+            "observation_date": observation_date.isoformat(),
+            "observed_at": observed_at.isoformat(),
+            **{
+                f"{name}_observed_at": timestamp.isoformat()
+                for name, timestamp in source_hours.items()
+            },
         }
     )
     return result

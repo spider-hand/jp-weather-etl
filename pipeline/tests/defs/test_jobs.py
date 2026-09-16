@@ -3,14 +3,34 @@ from io import BytesIO
 
 import polars as pl
 import pytest
-from dagster import DefaultScheduleStatus, Definitions
+from dagster import Definitions
 
-from pipeline.defs import jobs, schedules
+from pipeline.defs import jobs
 from pipeline.defs.assets import cleaned, processed, raw, stations, weather
 from pipeline.storage import PROCESSED_BUCKET, RAW_BUCKET
 
-COMMON_HEADERS = ["観測所番号", "都道府県", "地点", "国際地点番号"]
-COMMON_VALUES = ["11001", "北海道", "宗谷岬", ""]
+COMMON_HEADERS = [
+    "観測所番号",
+    "都道府県",
+    "地点",
+    "国際地点番号",
+    "現在時刻(年)",
+    "現在時刻(月)",
+    "現在時刻(日)",
+    "現在時刻(時)",
+    "現在時刻(分)",
+]
+COMMON_VALUES = [
+    "11001",
+    "北海道",
+    "宗谷岬",
+    "",
+    "2026",
+    "09",
+    "13",
+    "23",
+    "00",
+]
 
 
 class FrozenDateTime:
@@ -81,7 +101,6 @@ def _definitions():
         ],
         asset_checks=cleaned.CLEANED_CHECKS,
         jobs=[jobs.weather_etl_job],
-        schedules=[schedules.weather_etl_schedule],
     )
 
 
@@ -102,9 +121,7 @@ def _mock_inputs(monkeypatch, tmp_path, payloads):
             "dailyInfo": [
                 {
                     "date": {"year": 2026, "month": 9, "day": 13},
-                    "pollenTypeInfo": [
-                        {"code": "TREE", "indexInfo": {"value": 4}}
-                    ],
+                    "pollenTypeInfo": [{"code": "TREE", "indexInfo": {"value": 4}}],
                     "plantInfo": [
                         {
                             "code": "ALDER",
@@ -198,17 +215,17 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
     assert metadata["source_object_key"].value == "20260913/precipitation.csv"
     assert metadata["observation_date"].value == "2026-09-13"
     assert metadata["row_count"].value == 1
-    assert metadata["column_count"].value == 4
+    assert metadata["column_count"].value == 5
+    assert metadata["observed_at"].value == "2026-09-13T23:00:00+09:00"
     assert metadata["null_count"].value == 0
 
     daily_event = next(
-        event
-        for event in events
-        if event.asset_key.to_user_string() == "daily_weather"
+        event for event in events if event.asset_key.to_user_string() == "daily_weather"
     )
     daily_metadata = daily_event.event_specific_data.materialization.metadata
     assert daily_metadata["row_count"].value == 1
-    assert daily_metadata["column_count"].value == 16
+    assert daily_metadata["column_count"].value == 17
+    assert daily_metadata["observed_at"].value == "2026-09-13T23:00:00+09:00"
 
     active_event = next(
         event
@@ -245,23 +262,18 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
         "20260913/daily_weather_conditions.parquet"
     )
     assert conditions_metadata["observation_date"].value == "2026-09-13"
+    assert conditions_metadata["observed_at"].value == ("2026-09-13T23:00:00+09:00")
     assert conditions_metadata["row_count"].value == 1
     assert conditions_metadata["column_count"].value == len(
         processed.DAILY_WEATHER_CONDITIONS_SCHEMA
     )
-
-    schedule = schedules.weather_etl_schedule
-    assert schedule.cron_schedule == "30 23 * * *"
-    assert schedule.execution_timezone == "Asia/Tokyo"
-    assert schedule.job_name == "weather_etl_job"
-    assert schedule.default_status is DefaultScheduleStatus.RUNNING
 
 
 @pytest.mark.parametrize(
     ("common_rows", "null_key_row_count", "duplicate_key_count"),
     [
         pytest.param(
-            [["", "北海道", "宗谷岬", ""]],
+            [["", "北海道", "宗谷岬", "", "2026", "09", "13", "23", "00"]],
             1,
             0,
             id="null-station-id",
@@ -290,8 +302,10 @@ def test_invalid_cleaned_key_blocks_daily_weather(
     )
     _mock_inputs(monkeypatch, tmp_path, payloads)
 
-    result = _definitions().resolve_job_def("weather_etl_job").execute_in_process(
-        raise_on_error=False
+    result = (
+        _definitions()
+        .resolve_job_def("weather_etl_job")
+        .execute_in_process(raise_on_error=False)
     )
 
     evaluation = next(
@@ -300,9 +314,7 @@ def test_invalid_cleaned_key_blocks_daily_weather(
         if evaluation.asset_key.to_user_string() == "precipitation_cleaned"
     )
     assert not evaluation.passed
-    assert (
-        evaluation.metadata["null_key_row_count"].value == null_key_row_count
-    )
+    assert evaluation.metadata["null_key_row_count"].value == null_key_row_count
     assert evaluation.metadata["duplicate_key_count"].value == duplicate_key_count
     materialized_assets = {
         event.asset_key.to_user_string()
