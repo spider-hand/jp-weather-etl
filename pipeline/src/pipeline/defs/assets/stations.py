@@ -1,4 +1,4 @@
-"""Build the active station dimension from the JMA station master."""
+"""Build the WMO station dimension from the JMA station master."""
 
 from pathlib import Path
 from typing import Final
@@ -15,9 +15,10 @@ STATION_MASTER_COLUMNS: Final = {
     "経度(度)": "longitude_degrees",
     "経度(分)": "longitude_minutes",
 }
-ACTIVE_STATIONS_SCHEMA: Final = pl.Schema(
+WMO_STATIONS_SCHEMA: Final = pl.Schema(
     {
         "station_id": pl.String,
+        "wmo_station_id": pl.String,
         "station_name": pl.String,
         "latitude": pl.Float64,
         "longitude": pl.Float64,
@@ -44,11 +45,15 @@ def _read_station_master(path: Path) -> pl.DataFrame:
     )
 
 
-def _select_active_stations(
+def _select_wmo_stations(
     daily_weather: pl.DataFrame, station_master: pl.DataFrame
 ) -> tuple[pl.DataFrame, list[str]]:
-    active_ids = daily_weather.select("station_id").unique()
-    missing_ids = active_ids.join(
+    wmo_ids = (
+        daily_weather.filter(pl.col("wmo_station_id").is_not_null())
+        .select("station_id", "wmo_station_id")
+        .unique()
+    )
+    missing_ids = wmo_ids.select("station_id").join(
         station_master.select("station_id").unique(),
         on="station_id",
         how="anti",
@@ -59,22 +64,23 @@ def _select_active_stations(
             f"{sorted(missing_ids, key=str)!r}"
         )
 
-    active_master = station_master.with_row_index("source_row").join(
-        active_ids, on="station_id", how="inner"
+    wmo_master = station_master.with_row_index("source_row").join(
+        wmo_ids, on="station_id", how="inner"
     )
     duplicate_ids = (
-        active_master.group_by("station_id")
+        wmo_master.group_by("station_id")
         .len()
         .filter(pl.col("len") > 1)["station_id"]
         .sort()
         .to_list()
     )
-    active_master = active_master.sort("source_row").unique(
+    wmo_master = wmo_master.sort("source_row").unique(
         subset="station_id", keep="first", maintain_order=True
     )
 
-    result = active_master.select(
+    result = wmo_master.select(
         "station_id",
+        "wmo_station_id",
         "station_name",
         (
             pl.col("latitude_degrees").cast(pl.Float64, strict=False)
@@ -87,7 +93,7 @@ def _select_active_stations(
     )
     invalid_ids = result.filter(
         pl.any_horizontal(
-            *(pl.col(column).is_null() for column in ACTIVE_STATIONS_SCHEMA.names())
+            *(pl.col(column).is_null() for column in WMO_STATIONS_SCHEMA.names())
         )
     )["station_id"].to_list()
     if invalid_ids:
@@ -97,16 +103,16 @@ def _select_active_stations(
         )
 
     return (
-        result.cast(ACTIVE_STATIONS_SCHEMA, strict=True).sort("station_id"),
+        result.cast(WMO_STATIONS_SCHEMA, strict=True).sort("station_id"),
         duplicate_ids,
     )
 
 
 @asset(group_name="stations")
-def active_stations(
+def wmo_stations(
     context: AssetExecutionContext, daily_weather: pl.DataFrame
 ) -> pl.DataFrame:
-    result, duplicate_ids = _select_active_stations(
+    result, duplicate_ids = _select_wmo_stations(
         daily_weather,
         _read_station_master(STATION_MASTER_PATH),
     )

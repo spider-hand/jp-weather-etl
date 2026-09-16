@@ -145,15 +145,15 @@ def _validate_pollen_date(
 
 
 def _download_pollen_results(
-    active_stations: pl.DataFrame,
+    wmo_stations: pl.DataFrame,
     api_key: str,
     expected_date: date,
     log_info: Callable[[str], None],
 ) -> list[dict[str, Any]]:
-    station_count = active_stations.height
+    station_count = wmo_stations.height
     log_info(f"Requesting pollen forecasts for {station_count} stations")
     results = []
-    for index, station in enumerate(active_stations.iter_rows(named=True), start=1):
+    for index, station in enumerate(wmo_stations.iter_rows(named=True), start=1):
         station_id = station["station_id"]
         latitude = station["latitude"]
         longitude = station["longitude"]
@@ -205,7 +205,7 @@ def max_gust_raw() -> MaterializeResult:
 
 @asset(group_name="raw")
 def pollen_raw(
-    context: AssetExecutionContext, active_stations: pl.DataFrame
+    context: AssetExecutionContext, wmo_stations: pl.DataFrame
 ) -> MaterializeResult:
     api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not api_key:
@@ -213,7 +213,7 @@ def pollen_raw(
 
     timestamp = datetime.now(JST)
     results = _download_pollen_results(
-        active_stations,
+        wmo_stations,
         api_key,
         timestamp.date(),
         context.log.info,

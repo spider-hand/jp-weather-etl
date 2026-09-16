@@ -84,10 +84,11 @@ def _pollen_response(day=2):
     }
 
 
-def _active_stations():
+def _wmo_stations():
     return pl.DataFrame(
         {
             "station_id": ["A", "B"],
+            "wmo_station_id": ["WMO-A", "WMO-B"],
             "station_name": ["Alpha", "Beta"],
             "latitude": [35.0, 36.0],
             "longitude": [139.0, 140.0],
@@ -137,7 +138,7 @@ def test_download_pollen_results_reports_progress(monkeypatch):
     )
 
     results = raw._download_pollen_results(
-        _active_stations(),
+        _wmo_stations(),
         "secret",
         date(2024, 1, 2),
         messages.append,
@@ -164,7 +165,7 @@ def test_pollen_raw_aggregates_and_stores_json(monkeypatch, s3_client):
     monkeypatch.setattr(raw, "datetime", FrozenDateTime)
     monkeypatch.setattr(raw, "_download_pollen_response", download)
 
-    result = raw.pollen_raw(build_asset_context(), _active_stations())
+    result = raw.pollen_raw(build_asset_context(), _wmo_stations())
 
     assert requests == [(35.0, 139.0, "secret"), (36.0, 140.0, "secret")]
     stored = s3_client.get_object(Bucket=RAW_BUCKET, Key="20240102/pollen.json")
@@ -201,7 +202,7 @@ def test_pollen_raw_date_mismatch_does_not_upload(monkeypatch, s3_client):
     )
 
     with pytest.raises(ValueError, match="Unexpected pollen forecast date"):
-        raw.pollen_raw(build_asset_context(), _active_stations())
+        raw.pollen_raw(build_asset_context(), _wmo_stations())
 
     assert "Contents" not in s3_client.list_objects_v2(Bucket=RAW_BUCKET)
 
@@ -210,7 +211,7 @@ def test_pollen_raw_requires_api_key(monkeypatch):
     monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="Missing Google Maps API key"):
-        raw.pollen_raw(build_asset_context(), _active_stations().clear())
+        raw.pollen_raw(build_asset_context(), _wmo_stations().clear())
 
 
 @pytest.mark.parametrize("daily_info", [None, [], [{}, {}]])

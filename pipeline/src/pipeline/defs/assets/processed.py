@@ -27,7 +27,7 @@ DAILY_WEATHER_CONDITIONS_SCHEMA: Final = pl.Schema(
         **{
             name: dtype
             for name, dtype in DAILY_WEATHER_SCHEMA.items()
-            if name not in ("station_id", "date", "observed_at")
+            if name not in ("station_id", "wmo_station_id", "date", "observed_at")
         },
         **{column: POLLEN_INFO_SCHEMA for column in POLLEN_INFO_COLUMNS.values()},
     }
@@ -36,12 +36,12 @@ DAILY_WEATHER_CONDITIONS_SCHEMA: Final = pl.Schema(
 
 def _merge_daily_weather_conditions(
     daily_weather: pl.DataFrame,
-    active_stations: pl.DataFrame,
+    wmo_stations: pl.DataFrame,
     pollen_cleaned: pl.DataFrame,
 ) -> pl.DataFrame:
     result = daily_weather.join(
-        active_stations,
-        on="station_id",
+        wmo_stations,
+        on=["station_id", "wmo_station_id"],
         how="inner",
         validate="1:1",
     ).join(
@@ -53,7 +53,7 @@ def _merge_daily_weather_conditions(
     if not (
         result.height
         == daily_weather.height
-        == active_stations.height
+        == wmo_stations.height
         == pollen_cleaned.height
     ):
         raise ValueError("daily weather condition station IDs or dates do not match")
@@ -70,12 +70,12 @@ def _merge_daily_weather_conditions(
 @asset(group_name="processed")
 def daily_weather_conditions(
     daily_weather: pl.DataFrame,
-    active_stations: pl.DataFrame,
+    wmo_stations: pl.DataFrame,
     pollen_cleaned: pl.DataFrame,
 ) -> MaterializeResult:
     result = _merge_daily_weather_conditions(
         daily_weather,
-        active_stations,
+        wmo_stations,
         pollen_cleaned,
     )
     observation_date = result["date"][0]

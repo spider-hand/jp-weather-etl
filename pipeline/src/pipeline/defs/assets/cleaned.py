@@ -23,6 +23,7 @@ from pipeline.storage import RAW_BUCKET, create_s3_client
 
 COMMON_COLUMN_MAPPING: Final = {
     "観測所番号": "station_id",
+    "国際地点番号": "wmo_station_id",
 }
 JMA_TIMESTAMP_COLUMNS: Final = {
     "year": "現在時刻(年)",
@@ -64,6 +65,7 @@ COLUMN_MAPPINGS: Final = {
 
 COMMON_SCHEMA: Final = {
     "station_id": pl.String,
+    "wmo_station_id": pl.String,
     "date": pl.Date,
     "observed_at": OBSERVED_AT_DTYPE,
 }

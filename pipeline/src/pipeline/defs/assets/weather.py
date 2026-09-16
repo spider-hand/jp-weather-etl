@@ -8,6 +8,7 @@ from dagster import AssetExecutionContext, asset
 DAILY_WEATHER_SCHEMA: Final = pl.Schema(
     {
         "station_id": pl.String,
+        "wmo_station_id": pl.String,
         "date": pl.Date,
         "observed_at": pl.Datetime("us", time_zone="Asia/Tokyo"),
         "precipitation_mm": pl.Float64,
@@ -27,7 +28,7 @@ DAILY_WEATHER_SCHEMA: Final = pl.Schema(
     }
 )
 
-JOIN_KEYS = ["station_id", "date"]
+JOIN_KEYS = ["station_id", "wmo_station_id", "date"]
 
 
 def _merge_daily_weather(
@@ -47,10 +48,26 @@ def _merge_daily_weather(
     if len({frame["date"][0] for frame in frames}) != 1:
         raise ValueError("daily_weather requires one shared observation date")
     observed_at = min(frame["observed_at"][0] for frame in frames)
-    result = precipitation_cleaned.drop("observed_at")
+    frames = tuple(
+        frame.filter(pl.col("wmo_station_id").is_not_null()) for frame in frames
+    )
+    result = frames[0].drop("observed_at")
     for frame in frames[1:]:
         result = result.join(
             frame.drop("observed_at"), on=JOIN_KEYS, how="full", coalesce=True
+        )
+
+    conflicting_ids = (
+        result.group_by("station_id", "date")
+        .len()
+        .filter(pl.col("len") > 1)["station_id"]
+        .sort()
+        .to_list()
+    )
+    if conflicting_ids:
+        raise ValueError(
+            "Conflicting WMO station IDs for station IDs: "
+            f"{conflicting_ids!r}"
         )
 
     return (
@@ -61,7 +78,7 @@ def _merge_daily_weather(
         )
         .select(DAILY_WEATHER_SCHEMA.names())
         .cast(DAILY_WEATHER_SCHEMA, strict=True)
-        .sort([*JOIN_KEYS, "observed_at"])
+        .sort(["station_id", "date", "observed_at"])
     )
 
 

@@ -101,6 +101,7 @@ def test_cleaned_schemas(transform, headers, values, expected_schema):
 
     assert result.schema == expected_schema
     assert result["date"].to_list() == [date(2026, 9, 13)]
+    assert result["wmo_station_id"].to_list() == [None]
     assert result["observed_at"].to_list() == [datetime(2026, 9, 13, 14, tzinfo=JST)]
     assert "source_observed_at" not in result.columns
 

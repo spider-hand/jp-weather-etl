@@ -12,7 +12,7 @@ WEATHER_ASSET_KEYS = (
     "max_wind_cleaned",
     "max_gust_cleaned",
     "daily_weather",
-    "active_stations",
+    "wmo_stations",
     "pollen_raw",
     "pollen_cleaned",
     "daily_weather_conditions",

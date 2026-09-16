@@ -19,6 +19,7 @@ def _row(schema: pl.Schema, station_id: str, **values):
     row.update(
         {
             "station_id": station_id,
+            "wmo_station_id": f"WMO-{station_id}",
             "date": OBSERVATION_DATE,
             "observed_at": FOURTEEN_OCLOCK,
             **values,
@@ -84,9 +85,44 @@ def test_daily_weather_full_joins_and_sorts_all_cleaned_keys():
 
     assert result.schema == weather.DAILY_WEATHER_SCHEMA
     assert result["station_id"].to_list() == ["A", "B"]
+    assert result["wmo_station_id"].to_list() == ["WMO-A", "WMO-B"]
     assert result["max_temperature_c"].to_list() == [24.0, None]
     assert result["precipitation_mm"].to_list() == [None, 1.5]
     assert result["observed_at"].to_list() == [FOURTEEN_OCLOCK, FOURTEEN_OCLOCK]
+
+
+def test_daily_weather_filters_rows_without_wmo_station_id():
+    frames = list(_weather_frames())
+    frames[0] = pl.concat(
+        [
+            frames[0],
+            _frame(
+                cleaned.PRECIPITATION_SCHEMA,
+                [
+                    _row(
+                        cleaned.PRECIPITATION_SCHEMA,
+                        "B",
+                        wmo_station_id=None,
+                        precipitation_mm=2.0,
+                    )
+                ],
+            ),
+        ]
+    )
+
+    result = weather._merge_daily_weather(*frames)
+
+    assert result["station_id"].to_list() == ["A"]
+
+
+def test_daily_weather_rejects_conflicting_wmo_station_ids():
+    frames = list(_weather_frames())
+    frames[1] = frames[1].with_columns(
+        pl.lit("WMO-OTHER").alias("wmo_station_id")
+    )
+
+    with pytest.raises(ValueError, match="Conflicting WMO station IDs.*A"):
+        weather._merge_daily_weather(*frames)
 
 
 def test_daily_weather_uses_oldest_source_hour():

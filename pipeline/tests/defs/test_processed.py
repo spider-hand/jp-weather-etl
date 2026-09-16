@@ -22,6 +22,7 @@ def _conditions_inputs(station_id="A", observed_at=OBSERVED_AT):
     weather_row.update(
         {
             "station_id": station_id,
+            "wmo_station_id": "WMO-A",
             "date": OBSERVATION_DATE,
             "observed_at": observed_at,
             "precipitation_mm": 1.5,
@@ -29,11 +30,12 @@ def _conditions_inputs(station_id="A", observed_at=OBSERVED_AT):
         }
     )
     daily_weather = _frame(weather.DAILY_WEATHER_SCHEMA, [weather_row])
-    active_stations = _frame(
-        stations.ACTIVE_STATIONS_SCHEMA,
+    wmo_stations = _frame(
+        stations.WMO_STATIONS_SCHEMA,
         [
             {
                 "station_id": station_id,
+                "wmo_station_id": "WMO-A",
                 "station_name": "Alpha",
                 "latitude": 35.0,
                 "longitude": 139.0,
@@ -55,7 +57,7 @@ def _conditions_inputs(station_id="A", observed_at=OBSERVED_AT):
             }
         ],
     )
-    return daily_weather, active_stations, pollen_cleaned
+    return daily_weather, wmo_stations, pollen_cleaned
 
 
 def test_daily_weather_conditions_joins_one_row_per_station():
@@ -69,41 +71,42 @@ def test_daily_weather_conditions_joins_one_row_per_station():
     assert result["tree_info"].to_list() == [
         {"value": 4, "plants": [{"code": "ALDER", "value": 2}]}
     ]
+    assert "wmo_station_id" not in result.columns
 
 
-@pytest.mark.parametrize("input_name", ["active_stations", "pollen_cleaned"])
+@pytest.mark.parametrize("input_name", ["wmo_stations", "pollen_cleaned"])
 def test_daily_weather_conditions_rejects_mismatched_stations(input_name):
-    daily_weather, active_stations, pollen_cleaned = _conditions_inputs()
-    if input_name == "active_stations":
-        active_stations = active_stations.with_columns(pl.lit("B").alias("station_id"))
+    daily_weather, wmo_stations, pollen_cleaned = _conditions_inputs()
+    if input_name == "wmo_stations":
+        wmo_stations = wmo_stations.with_columns(pl.lit("B").alias("station_id"))
     else:
         pollen_cleaned = pollen_cleaned.with_columns(pl.lit("B").alias("station_id"))
 
     with pytest.raises(ValueError, match="station IDs or dates do not match"):
         processed._merge_daily_weather_conditions(
-            daily_weather, active_stations, pollen_cleaned
+            daily_weather, wmo_stations, pollen_cleaned
         )
 
 
 def test_daily_weather_conditions_rejects_different_dates():
-    daily_weather, active_stations, pollen_cleaned = _conditions_inputs()
+    daily_weather, wmo_stations, pollen_cleaned = _conditions_inputs()
     pollen_cleaned = pollen_cleaned.with_columns(
         pl.lit(date(2026, 9, 14)).alias("date")
     )
 
     with pytest.raises(ValueError, match="station IDs or dates do not match"):
         processed._merge_daily_weather_conditions(
-            daily_weather, active_stations, pollen_cleaned
+            daily_weather, wmo_stations, pollen_cleaned
         )
 
 
 def test_daily_weather_conditions_does_not_upload_mismatched_data(s3_client):
-    daily_weather, active_stations, pollen_cleaned = _conditions_inputs()
+    daily_weather, wmo_stations, pollen_cleaned = _conditions_inputs()
     pollen_cleaned = pollen_cleaned.with_columns(pl.lit("B").alias("station_id"))
 
     with pytest.raises(ValueError, match="station IDs or dates do not match"):
         processed.daily_weather_conditions(
-            daily_weather, active_stations, pollen_cleaned
+            daily_weather, wmo_stations, pollen_cleaned
         )
 
     assert "Contents" not in s3_client.list_objects_v2(Bucket=PROCESSED_BUCKET)
@@ -138,7 +141,7 @@ def test_daily_weather_conditions_rejects_empty_weather():
     with pytest.raises(ValueError, match="cannot be empty"):
         processed._merge_daily_weather_conditions(
             _frame(weather.DAILY_WEATHER_SCHEMA, []),
-            _frame(stations.ACTIVE_STATIONS_SCHEMA, []),
+            _frame(stations.WMO_STATIONS_SCHEMA, []),
             _frame(cleaned.POLLEN_SCHEMA, []),
         )
 

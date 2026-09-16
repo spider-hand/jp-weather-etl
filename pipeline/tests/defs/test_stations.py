@@ -8,13 +8,20 @@ from pipeline.defs.assets import stations
 MASTER_HEADERS = list(stations.STATION_MASTER_COLUMNS)
 
 
-def _daily_weather(station_ids):
+def _daily_weather(station_ids, wmo_station_ids=None):
+    if wmo_station_ids is None:
+        wmo_station_ids = [f"WMO-{value}" for value in station_ids]
     return pl.DataFrame(
         {
             "station_id": station_ids,
+            "wmo_station_id": wmo_station_ids,
             "date": [date(2026, 9, day) for day in range(1, len(station_ids) + 1)],
         },
-        schema={"station_id": pl.String, "date": pl.Date},
+        schema={
+            "station_id": pl.String,
+            "wmo_station_id": pl.String,
+            "date": pl.Date,
+        },
     )
 
 
@@ -27,7 +34,7 @@ def _station_master(tmp_path, rows):
     return stations._read_station_master(path)
 
 
-def test_active_stations(tmp_path):
+def test_wmo_stations(tmp_path):
     master = _station_master(
         tmp_path,
         [
@@ -38,13 +45,14 @@ def test_active_stations(tmp_path):
         ],
     )
 
-    result, duplicate_ids = stations._select_active_stations(
+    result, duplicate_ids = stations._select_wmo_stations(
         _daily_weather(["B", "A", "A"]), master
     )
 
     assert duplicate_ids == []
-    assert result.schema == stations.ACTIVE_STATIONS_SCHEMA
+    assert result.schema == stations.WMO_STATIONS_SCHEMA
     assert result["station_id"].to_list() == ["A", "B"]
+    assert result["wmo_station_id"].to_list() == ["WMO-A", "WMO-B"]
     assert result["station_name"].to_list() == ["宗谷岬", "地点B"]
     assert result["latitude"].to_list() == pytest.approx([45.52, 35.5])
     assert result["longitude"].to_list() == pytest.approx([141.935, 139.75])
@@ -73,16 +81,16 @@ def test_active_stations(tmp_path):
         ),
     ],
 )
-def test_active_stations_rejects_invalid_active_master_rows(
+def test_wmo_stations_rejects_invalid_master_rows(
     tmp_path, daily_ids, master_rows, message
 ):
     master = _station_master(tmp_path, master_rows)
 
     with pytest.raises(ValueError, match=message):
-        stations._select_active_stations(_daily_weather(daily_ids), master)
+        stations._select_wmo_stations(_daily_weather(daily_ids), master)
 
 
-def test_active_stations_uses_first_duplicate_station(tmp_path):
+def test_wmo_stations_uses_first_duplicate_station(tmp_path):
     master = _station_master(
         tmp_path,
         [
@@ -91,7 +99,7 @@ def test_active_stations_uses_first_duplicate_station(tmp_path):
         ],
     )
 
-    result, duplicate_ids = stations._select_active_stations(
+    result, duplicate_ids = stations._select_wmo_stations(
         _daily_weather(["A"]), master
     )
 
@@ -99,3 +107,19 @@ def test_active_stations_uses_first_duplicate_station(tmp_path):
     assert result["station_name"].to_list() == ["最初の地点"]
     assert result["latitude"].to_list() == [35.5]
     assert result["longitude"].to_list() == [139.75]
+
+
+def test_wmo_stations_excludes_null_wmo_station_ids(tmp_path):
+    master = _station_master(
+        tmp_path,
+        [
+            ["A", "地点A", "35", "30", "139", "45"],
+            ["B", "地点B", "36", "0", "140", "0"],
+        ],
+    )
+
+    result, _ = stations._select_wmo_stations(
+        _daily_weather(["A", "B"], ["WMO-A", None]), master
+    )
+
+    assert result["station_id"].to_list() == ["A"]
