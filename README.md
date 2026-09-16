@@ -57,6 +57,31 @@ flowchart TD
     daily_conditions -->|write Parquet| processed
 ```
 
+## SQL Analytics
+
+Processed weather snapshots can be queried directly with DuckDB.
+
+Example:
+
+```console
+$ make query SQL="SELECT date, station_name, max_temperature_c FROM hottest(DATE '2026-09-16')"
+┌────────────┬──────────────┬───────────────────┐
+│    date    │ station_name │ max_temperature_c │
+│    date    │   varchar    │      double       │
+├────────────┼──────────────┼───────────────────┤
+│ 2026-09-16 │ 鹿児島       │              32.1 │
+└────────────┴──────────────┴───────────────────┘
+```
+
+| Name                    | Arguments                                                | Description                                                                                                              |
+| ----------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `hottest`               | `p_date DATE`                                            | Returns the highest maximum temperature on the date.                                                                     |
+| `coldest`               | `p_date DATE`                                            | Returns the lowest minimum temperature on the date.                                                                      |
+| `highest_precipitation` | `p_date DATE`                                            | Returns the highest precipitation on the date.                                                                           |
+| `strongest_gust`        | `p_date DATE`                                            | Returns the strongest gust on the date.                                                                                  |
+| `nearest_stations`      | `p_date DATE`, `p_latitude DOUBLE`, `p_longitude DOUBLE` | Returns the nearest station to the coordinates on the date.                                                              |
+| `daily_summary`         | `p_date DATE`                                            | Returns a weather summary for the date.                                                                                  |
+
 ## Data Sources
 
 Weather observation data and station master data are provided by the [Japan Meteorological Agency (JMA)](https://www.data.jma.go.jp/stats/data/mdrr/docs/csv_dl_readme.html).

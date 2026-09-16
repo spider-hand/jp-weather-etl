@@ -1,4 +1,4 @@
-.PHONY: dev down storage-up storage-setup storage-smoke storage-reset format lint test
+.PHONY: dev down storage-up storage-setup storage-smoke storage-reset query format lint test
 
 storage-up:
 	docker compose up -d --wait
@@ -17,6 +17,9 @@ dev: storage-setup
 
 down:
 	docker compose down
+
+query:
+	uv run --project pipeline --env-file .env python -m pipeline.analytics "$(SQL)"
 
 format:
 	uv run --project pipeline ruff format pipeline
