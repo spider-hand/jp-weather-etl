@@ -6,6 +6,12 @@ Inspired by live weather reports, this pipeline runs on demand instead of on a f
 
 ## Setup
 
+Install the project dependencies:
+
+```sh
+uv sync
+```
+
 Set up environment variables:
 
 ```sh
@@ -21,7 +27,7 @@ make dev
 The Dagster UI is available at http://localhost:3000, the S3 API at
 http://localhost:9000, and the RustFS console at http://localhost:9001.
 
-## Architecture
+## Pipeline Architecture
 
 ```mermaid
 flowchart TD
@@ -75,6 +81,7 @@ $ make query SQL="SELECT date, station_name, max_temperature_c FROM hottest(DATE
 
 | Name                    | Arguments                                                | Description                                                                                                              |
 | ----------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `all_weather_conditions` | `p_date DATE`                                            | Returns all weather conditions on the date.                                                                              |
 | `hottest`               | `p_date DATE`                                            | Returns the highest maximum temperature on the date.                                                                     |
 | `coldest`               | `p_date DATE`                                            | Returns the lowest minimum temperature on the date.                                                                      |
 | `highest_precipitation` | `p_date DATE`                                            | Returns the highest precipitation on the date.                                                                           |

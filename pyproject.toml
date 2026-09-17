@@ -1,12 +1,13 @@
 [project]
-name = "pipeline"
-requires-python = ">=3.10,<3.15"
+name = "jp_weather_etl"
 version = "0.1.0"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "boto3>=1.40,<2",
     "dagster==1.13.22",
     "duckdb>=1.5.5,<2",
     "polars>=1,<2",
+    "streamlit>=1.64.0",
 ]
 
 [dependency-groups]
@@ -23,10 +24,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-force-include = { "pyproject.toml" = "pyproject.toml" }
+packages = ["storage", "queries", "pipeline"]
+exclude = ["storage/tests", "queries/tests", "pipeline/tests"]
 
 [tool.ruff]
-src = ["src"]
+src = ["."]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pipeline", "queries", "storage"]
 
 [tool.dg]
 directory_type = "project"

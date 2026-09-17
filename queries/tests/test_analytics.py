@@ -5,7 +5,7 @@ import duckdb
 import polars as pl
 import pytest
 
-from pipeline.analytics import connect
+from queries.analytics import connect
 
 OBSERVATION_DATE = date(2026, 9, 17)
 OBSERVED_AT = datetime(2026, 9, 17, 12, tzinfo=ZoneInfo("Asia/Tokyo"))
@@ -33,6 +33,25 @@ def _write_weather_parquet(tmp_path, **overrides):
 def _station_ids(parquet_path, query):
     with connect(str(parquet_path)) as connection:
         return [row[0] for row in connection.execute(query).fetchall()]
+
+
+def test_all_weather_conditions_returns_every_row_for_requested_date(tmp_path):
+    parquet_path = _write_weather_parquet(
+        tmp_path,
+        date=[
+            OBSERVATION_DATE,
+            date(2026, 9, 18),
+            date(2026, 9, 19),
+            date(2026, 9, 20),
+        ],
+    )
+
+    result = _station_ids(
+        parquet_path,
+        "SELECT station_id FROM all_weather_conditions(DATE '2026-09-17')",
+    )
+
+    assert result == ["A"]
 
 
 def test_hottest_returns_hottest_station(tmp_path):
@@ -154,12 +173,10 @@ def test_nearest_stations_returns_nearest_station(tmp_path):
     )
 
     with connect(str(parquet_path)) as connection:
-        result = connection.execute(
-            """
+        result = connection.execute("""
             SELECT station_id, distance_km
             FROM nearest_stations(DATE '2026-09-17', 35.0, 139.0)
-            """
-        ).fetchall()
+            """).fetchall()
 
     assert len(result) == 1
     assert result[0][0] == "A"
@@ -232,6 +249,7 @@ def test_nearest_stations_rejects_invalid_coordinates(
         "SELECT * FROM highest_precipitation(DATE '2026-09-18')",
         "SELECT * FROM strongest_gust(DATE '2026-09-18')",
         "SELECT * FROM nearest_stations(DATE '2026-09-18', 35.0, 139.0)",
+        "SELECT * FROM all_weather_conditions(DATE '2026-09-18')",
     ],
 )
 def test_query_returns_no_rows_for_missing_date(tmp_path, query):

@@ -7,7 +7,7 @@ from dagster import Definitions
 
 from pipeline.defs import jobs
 from pipeline.defs.assets import cleaned, processed, raw, stations, weather
-from pipeline.storage import PROCESSED_BUCKET, RAW_BUCKET
+from storage import PROCESSED_BUCKET, RAW_BUCKET
 
 COMMON_HEADERS = [
     "観測所番号",
@@ -230,9 +230,7 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
     assert daily_metadata["observed_at"].value == "2026-09-13T23:00:00+09:00"
 
     station_event = next(
-        event
-        for event in events
-        if event.asset_key.to_user_string() == "wmo_stations"
+        event for event in events if event.asset_key.to_user_string() == "wmo_stations"
     )
     station_metadata = station_event.event_specific_data.materialization.metadata
     assert station_metadata["row_count"].value == 1

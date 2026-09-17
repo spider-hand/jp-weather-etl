@@ -1,19 +1,13 @@
 """Run SQL against the processed weather Parquet files with DuckDB."""
 
 import argparse
-import os
 from importlib.resources import files
-from urllib.parse import urlsplit
 
 import duckdb
 
-WEATHER_SOURCE = "s3://processed/*/daily_weather_conditions.parquet"
-S3_ENV = (
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_DEFAULT_REGION",
-    "S3_ENDPOINT_URL",
-)
+from storage import PROCESSED_BUCKET, StorageSettings
+
+WEATHER_SOURCE = f"s3://{PROCESSED_BUCKET}/*/daily_weather_conditions.parquet"
 
 
 def _quote(value: str) -> str:
@@ -21,25 +15,19 @@ def _quote(value: str) -> str:
 
 
 def _configure_s3(connection: duckdb.DuckDBPyConnection) -> None:
-    missing = [name for name in S3_ENV if not os.environ.get(name)]
-    if missing:
-        raise RuntimeError("Missing environment variables: " + ", ".join(missing))
-
-    endpoint = urlsplit(os.environ["S3_ENDPOINT_URL"])
-    if endpoint.scheme not in ("http", "https") or not endpoint.netloc:
-        raise ValueError("S3_ENDPOINT_URL must be an http:// or https:// URL")
+    settings = StorageSettings.from_env()
 
     connection.execute(
         f"""
         CREATE OR REPLACE TEMPORARY SECRET weather_storage (
             TYPE s3,
-            KEY_ID {_quote(os.environ["AWS_ACCESS_KEY_ID"])},
-            SECRET {_quote(os.environ["AWS_SECRET_ACCESS_KEY"])},
-            REGION {_quote(os.environ["AWS_DEFAULT_REGION"])},
-            ENDPOINT {_quote(endpoint.netloc)},
+            KEY_ID {_quote(settings.access_key_id)},
+            SECRET {_quote(settings.secret_access_key)},
+            REGION {_quote(settings.region)},
+            ENDPOINT {_quote(settings.endpoint)},
             URL_STYLE 'path',
-            USE_SSL {str(endpoint.scheme == "https").lower()},
-            SCOPE 's3://processed'
+            USE_SSL {str(settings.use_ssl).lower()},
+            SCOPE 's3://{PROCESSED_BUCKET}'
         )
         """
     )
@@ -56,14 +44,12 @@ def connect(weather_source: str = WEATHER_SOURCE) -> duckdb.DuckDBPyConnection:
             _configure_s3(connection)
 
         connection.execute("SET VARIABLE weather_source = ?", [weather_source])
-        sql_root = files("pipeline.sql")
+        sql_root = files("queries")
         connection.execute(
             sql_root.joinpath("weather_conditions.sql").read_text(encoding="utf-8")
         )
-        for query in sorted(
-            files("pipeline.sql.queries").iterdir(), key=lambda item: item.name
-        ):
-            if query.name.endswith(".sql"):
+        for query in sorted(sql_root.iterdir(), key=lambda item: item.name):
+            if query.name.endswith(".sql") and query.name != "weather_conditions.sql":
                 connection.execute(query.read_text(encoding="utf-8"))
     except Exception:
         connection.close()

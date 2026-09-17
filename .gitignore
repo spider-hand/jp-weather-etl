@@ -1,1 +1,7 @@
 .env
+
+__pycache__/
+*.py[cod]
+
+# Dagster temporary local instance
+.tmp_dagster_home_*/

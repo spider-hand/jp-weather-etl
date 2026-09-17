@@ -66,8 +66,7 @@ def _merge_daily_weather(
     )
     if conflicting_ids:
         raise ValueError(
-            "Conflicting WMO station IDs for station IDs: "
-            f"{conflicting_ids!r}"
+            f"Conflicting WMO station IDs for station IDs: {conflicting_ids!r}"
         )
 
     return (

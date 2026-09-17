@@ -27,9 +27,7 @@ def _daily_weather(station_ids, wmo_station_ids=None):
 
 def _station_master(tmp_path, rows):
     path = tmp_path / "station_master.csv"
-    csv = "\r\n".join(
-        [",".join(MASTER_HEADERS), *(",".join(row) for row in rows)]
-    )
+    csv = "\r\n".join([",".join(MASTER_HEADERS), *(",".join(row) for row in rows)])
     path.write_bytes((csv + "\r\n").encode("cp932"))
     return stations._read_station_master(path)
 
@@ -99,9 +97,7 @@ def test_wmo_stations_uses_first_duplicate_station(tmp_path):
         ],
     )
 
-    result, duplicate_ids = stations._select_wmo_stations(
-        _daily_weather(["A"]), master
-    )
+    result, duplicate_ids = stations._select_wmo_stations(_daily_weather(["A"]), master)
 
     assert duplicate_ids == ["A"]
     assert result["station_name"].to_list() == ["最初の地点"]

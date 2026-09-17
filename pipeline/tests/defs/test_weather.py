@@ -117,9 +117,7 @@ def test_daily_weather_filters_rows_without_wmo_station_id():
 
 def test_daily_weather_rejects_conflicting_wmo_station_ids():
     frames = list(_weather_frames())
-    frames[1] = frames[1].with_columns(
-        pl.lit("WMO-OTHER").alias("wmo_station_id")
-    )
+    frames[1] = frames[1].with_columns(pl.lit("WMO-OTHER").alias("wmo_station_id"))
 
     with pytest.raises(ValueError, match="Conflicting WMO station IDs.*A"):
         weather._merge_daily_weather(*frames)

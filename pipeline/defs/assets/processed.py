@@ -8,7 +8,7 @@ from dagster import MaterializeResult, asset
 
 from pipeline.defs.assets.cleaned import POLLEN_INFO_COLUMNS, POLLEN_INFO_SCHEMA
 from pipeline.defs.assets.weather import DAILY_WEATHER_SCHEMA
-from pipeline.storage import (
+from storage import (
     PROCESSED_BUCKET,
     create_s3_client,
     upload_verified_payload,

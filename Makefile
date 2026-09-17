@@ -4,31 +4,31 @@ storage-up:
 	docker compose up -d --wait
 
 storage-setup: storage-up
-	uv run --project pipeline --env-file .env python -m pipeline.storage.setup
+	uv run --env-file .env python -m storage.setup
 
 storage-smoke: storage-setup
-	uv run --project pipeline --env-file .env python -m pipeline.storage.smoke
+	uv run --env-file .env python -m storage.smoke
 
 storage-reset:
 	docker compose down -v
 
 dev: storage-setup
-	cd pipeline && uv run --env-file ../.env dg dev
+	uv run --env-file .env dg dev
 
 down:
 	docker compose down
 
 ui:
-	uv run --project ui streamlit run ui/main.py
+	uv run --env-file .env streamlit run ui/main.py
 
 query:
-	uv run --project pipeline --env-file .env python -m pipeline.analytics "$(SQL)"
+	uv run --env-file .env python -m queries.analytics "$(SQL)"
 
 format:
-	uv run --project pipeline ruff format pipeline
+	uv run ruff format storage queries pipeline ui
 
 lint:
-	uv run --project pipeline ruff check pipeline
+	uv run ruff check storage queries pipeline ui
 
 test:
-	uv run --project pipeline pytest
+	uv run pytest

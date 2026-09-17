@@ -3,7 +3,7 @@ import pytest
 from moto import mock_aws
 
 from pipeline.defs.assets import cleaned, processed, raw
-from pipeline.storage import PROCESSED_BUCKET, RAW_BUCKET
+from storage import PROCESSED_BUCKET, RAW_BUCKET
 
 
 @pytest.fixture

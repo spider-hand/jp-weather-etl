@@ -7,7 +7,7 @@ import polars as pl
 import pytest
 
 from pipeline.defs.assets import cleaned, processed, stations, weather
-from pipeline.storage import PROCESSED_BUCKET
+from storage import PROCESSED_BUCKET
 
 OBSERVATION_DATE = date(2026, 9, 13)
 OBSERVED_AT = datetime(2026, 9, 13, 14, tzinfo=ZoneInfo("Asia/Tokyo"))
@@ -105,9 +105,7 @@ def test_daily_weather_conditions_does_not_upload_mismatched_data(s3_client):
     pollen_cleaned = pollen_cleaned.with_columns(pl.lit("B").alias("station_id"))
 
     with pytest.raises(ValueError, match="station IDs or dates do not match"):
-        processed.daily_weather_conditions(
-            daily_weather, wmo_stations, pollen_cleaned
-        )
+        processed.daily_weather_conditions(daily_weather, wmo_stations, pollen_cleaned)
 
     assert "Contents" not in s3_client.list_objects_v2(Bucket=PROCESSED_BUCKET)
 

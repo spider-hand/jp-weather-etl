@@ -6,7 +6,7 @@ from typing import Final
 import polars as pl
 from dagster import AssetExecutionContext, asset
 
-STATION_MASTER_PATH: Final = Path(__file__).parents[5] / "data/station_master.csv"
+STATION_MASTER_PATH: Final = Path(__file__).parents[3] / "data/station_master.csv"
 STATION_MASTER_COLUMNS: Final = {
     "観測所番号": "station_id",
     "観測所名": "station_name",
@@ -36,10 +36,7 @@ def _read_station_master(path: Path) -> pl.DataFrame:
         )
     return frame.select(
         *(
-            pl.col(source)
-            .str.strip_chars()
-            .replace("", None)
-            .alias(target)
+            pl.col(source).str.strip_chars().replace("", None).alias(target)
             for source, target in STATION_MASTER_COLUMNS.items()
         )
     )
@@ -53,11 +50,15 @@ def _select_wmo_stations(
         .select("station_id", "wmo_station_id")
         .unique()
     )
-    missing_ids = wmo_ids.select("station_id").join(
-        station_master.select("station_id").unique(),
-        on="station_id",
-        how="anti",
-    )["station_id"].to_list()
+    missing_ids = (
+        wmo_ids.select("station_id")
+        .join(
+            station_master.select("station_id").unique(),
+            on="station_id",
+            how="anti",
+        )["station_id"]
+        .to_list()
+    )
     if missing_ids:
         raise ValueError(
             f"Missing station master rows for station IDs: "

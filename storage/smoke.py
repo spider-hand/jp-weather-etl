@@ -2,7 +2,7 @@
 
 from uuid import uuid4
 
-from pipeline.storage import BUCKETS, create_s3_client
+from storage import BUCKETS, create_s3_client
 
 
 def smoke_check() -> None:

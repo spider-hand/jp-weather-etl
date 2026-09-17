@@ -1,6 +1,6 @@
 """Create the buckets required by the pipeline."""
 
-from pipeline.storage import BUCKETS, create_s3_client
+from storage import BUCKETS, create_s3_client
 
 
 def setup_storage() -> None:
