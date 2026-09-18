@@ -206,12 +206,18 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
         Key="20260913/daily_weather_conditions.parquet",
     )
     conditions = pl.read_parquet(BytesIO(processed_object["Body"].read()))
+    geojson_object = s3_client.get_object(
+        Bucket=PROCESSED_BUCKET,
+        Key="20260913/daily_weather_conditions.geojson",
+    )
+    feature_collection = json.loads(geojson_object["Body"].read())
     assert conditions.schema == processed.DAILY_WEATHER_CONDITIONS_SCHEMA
     assert conditions.select("station_id", "station_name").row(0) == (
         "11001",
         "宗谷岬",
     )
     assert "wmo_station_id" not in conditions.columns
+    assert feature_collection["features"][0]["properties"]["station_id"] == "11001"
 
     objects = s3_client.list_objects_v2(Bucket=RAW_BUCKET).get("Contents", [])
     assert {item["Key"] for item in objects} == {
@@ -294,6 +300,9 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
     assert conditions_metadata["destination_object_key"].value == (
         "20260913/daily_weather_conditions.parquet"
     )
+    assert conditions_metadata["geojson_destination_object_key"].value == (
+        "20260913/daily_weather_conditions.geojson"
+    )
     assert conditions_metadata["observation_date"].value == "2026-09-13"
     assert conditions_metadata["observed_at"].value == ("2026-09-13T23:00:00+09:00")
     assert conditions_metadata["row_count"].value == 1
@@ -338,11 +347,20 @@ def test_weather_rebuild_job_reuses_todays_raw_snapshot(
         Key="20260913/daily_weather_conditions.parquet",
     )
     conditions = pl.read_parquet(BytesIO(processed_object["Body"].read()))
+    geojson_object = s3_client.get_object(
+        Bucket=PROCESSED_BUCKET,
+        Key="20260913/daily_weather_conditions.geojson",
+    )
+    feature_collection = json.loads(geojson_object["Body"].read())
     assert conditions.schema == processed.DAILY_WEATHER_CONDITIONS_SCHEMA
     assert conditions.select("station_id", "station_name").row(0) == (
         "11001",
         "宗谷岬",
     )
+    assert feature_collection["features"][0]["geometry"] == {
+        "type": "Point",
+        "coordinates": [141.935, 45.52],
+    }
 
 
 @pytest.mark.parametrize(

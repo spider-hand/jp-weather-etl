@@ -1,5 +1,6 @@
 """Publish final processed weather conditions."""
 
+import json
 from io import BytesIO
 from typing import Final
 
@@ -15,6 +16,7 @@ from storage import (
 )
 
 PARQUET_CONTENT_TYPE = "application/vnd.apache.parquet"
+GEOJSON_CONTENT_TYPE = "application/geo+json"
 
 DAILY_WEATHER_CONDITIONS_SCHEMA: Final = pl.Schema(
     {
@@ -67,6 +69,28 @@ def _merge_daily_weather_conditions(
     )
 
 
+def _geojson_payload(frame: pl.DataFrame) -> bytes:
+    features = []
+    for row in json.loads(frame.write_json()):
+        longitude = row.pop("longitude")
+        latitude = row.pop("latitude")
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [longitude, latitude],
+                },
+                "properties": row,
+            }
+        )
+    return json.dumps(
+        {"type": "FeatureCollection", "features": features},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+
 @asset(group_name="processed")
 def daily_weather_conditions(
     daily_weather: pl.DataFrame,
@@ -82,17 +106,28 @@ def daily_weather_conditions(
     observed_at = result["observed_at"][0]
     buffer = BytesIO()
     result.write_parquet(buffer)
-    object_key = f"{observation_date:%Y%m%d}/daily_weather_conditions.parquet"
+    parquet_payload = buffer.getvalue()
+    geojson_payload = _geojson_payload(result)
+    object_prefix = f"{observation_date:%Y%m%d}/daily_weather_conditions"
+    client = create_s3_client()
     storage_metadata = upload_verified_payload(
-        create_s3_client(),
+        client,
         bucket=PROCESSED_BUCKET,
-        object_key=object_key,
-        payload=buffer.getvalue(),
+        object_key=f"{object_prefix}.parquet",
+        payload=parquet_payload,
         content_type=PARQUET_CONTENT_TYPE,
+    )
+    geojson_metadata = upload_verified_payload(
+        client,
+        bucket=PROCESSED_BUCKET,
+        object_key=f"{object_prefix}.geojson",
+        payload=geojson_payload,
+        content_type=GEOJSON_CONTENT_TYPE,
     )
     return MaterializeResult(
         metadata={
             **storage_metadata,
+            **{f"geojson_{key}": value for key, value in geojson_metadata.items()},
             "observation_date": observation_date.isoformat(),
             "observed_at": observed_at.isoformat(),
             "row_count": result.height,

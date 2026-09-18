@@ -50,7 +50,7 @@ flowchart TD
     subgraph rustfs["RustFS (S3-compatible storage)"]
         raw_weather[("raw/YYYYMMDD/*.csv")]
         raw_pollen[("raw/YYYYMMDD/pollen.json")]
-        processed[("processed/YYYYMMDD/<br/>daily_weather_conditions.parquet")]
+        processed[("processed/YYYYMMDD/<br/>daily_weather_conditions.parquet<br/>daily_weather_conditions.geojson")]
     end
 
     jma_weather -->|ingest| raw_weather
@@ -64,7 +64,7 @@ flowchart TD
     daily_weather -->|join| daily_conditions
     wmo_stations -->|join| daily_conditions
     cleaned_pollen -->|join| daily_conditions
-    daily_conditions -->|write Parquet| processed
+    daily_conditions -->|write Parquet + GeoJSON| processed
 ```
 
 ## SQL Analytics
