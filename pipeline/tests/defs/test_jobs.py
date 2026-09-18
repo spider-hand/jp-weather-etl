@@ -1,4 +1,5 @@
-from datetime import datetime
+import json
+from datetime import date, datetime
 from io import BytesIO
 
 import polars as pl
@@ -90,6 +91,42 @@ def _raw_payloads():
     }
 
 
+def _pollen_response():
+    return {
+        "regionCode": "JP",
+        "dailyInfo": [
+            {
+                "date": {"year": 2026, "month": 9, "day": 13},
+                "pollenTypeInfo": [{"code": "TREE", "indexInfo": {"value": 4}}],
+                "plantInfo": [
+                    {
+                        "code": "ALDER",
+                        "indexInfo": {"value": 2},
+                        "plantDescription": {"type": "TREE"},
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def _pollen_payload():
+    return json.dumps(
+        {
+            "results": [
+                {
+                    "station_id": "11001",
+                    "latitude": 45.52,
+                    "longitude": 141.935,
+                    "response": _pollen_response(),
+                }
+            ]
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+
 def _definitions():
     return Definitions(
         assets=[
@@ -100,7 +137,7 @@ def _definitions():
             processed.daily_weather_conditions,
         ],
         asset_checks=cleaned.CLEANED_CHECKS,
-        jobs=[jobs.weather_etl_job],
+        jobs=[jobs.weather_etl_job, jobs.weather_rebuild_job],
     )
 
 
@@ -116,22 +153,7 @@ def _mock_inputs(monkeypatch, tmp_path, payloads):
     monkeypatch.setattr(
         raw,
         "_download_pollen_response",
-        lambda *_args: {
-            "regionCode": "JP",
-            "dailyInfo": [
-                {
-                    "date": {"year": 2026, "month": 9, "day": 13},
-                    "pollenTypeInfo": [{"code": "TREE", "indexInfo": {"value": 4}}],
-                    "plantInfo": [
-                        {
-                            "code": "ALDER",
-                            "indexInfo": {"value": 2},
-                            "plantDescription": {"type": "TREE"},
-                        }
-                    ],
-                }
-            ],
-        },
+        lambda *_args: _pollen_response(),
     )
     station_master_path = tmp_path / "station_master.csv"
     station_master_path.write_bytes(
@@ -141,6 +163,17 @@ def _mock_inputs(monkeypatch, tmp_path, payloads):
         ).encode("cp932")
     )
     monkeypatch.setattr(stations, "STATION_MASTER_PATH", station_master_path)
+
+
+def _store_raw_snapshot(s3_client, payloads, missing_filename=None):
+    snapshot = {**payloads, "pollen.json": _pollen_payload()}
+    for filename, payload in snapshot.items():
+        if filename != missing_filename:
+            s3_client.put_object(
+                Bucket=RAW_BUCKET,
+                Key=f"20260913/{filename}",
+                Body=payload,
+            )
 
 
 def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
@@ -267,6 +300,82 @@ def test_weather_etl_job(monkeypatch, s3_client, tmp_path):
     assert conditions_metadata["column_count"].value == len(
         processed.DAILY_WEATHER_CONDITIONS_SCHEMA
     )
+
+
+def test_weather_rebuild_job_reuses_todays_raw_snapshot(
+    monkeypatch, s3_client, tmp_path
+):
+    payloads = _raw_payloads()
+    _mock_inputs(monkeypatch, tmp_path, payloads)
+    monkeypatch.setattr(cleaned, "_today_jst", lambda: date(2026, 9, 13))
+    monkeypatch.setattr(
+        raw,
+        "_download_bytes",
+        lambda *_args: pytest.fail("weather download must not be called"),
+    )
+    monkeypatch.setattr(
+        raw,
+        "_download_pollen_response",
+        lambda *_args: pytest.fail("Pollen API must not be called"),
+    )
+    _store_raw_snapshot(s3_client, payloads)
+    defs = _definitions()
+
+    Definitions.validate_loadable(defs)
+    result = defs.resolve_job_def("weather_rebuild_job").execute_in_process()
+
+    assert result.success
+    materialized_assets = {
+        event.asset_key.to_user_string()
+        for event in result.get_asset_materialization_events()
+    }
+    assert materialized_assets == set(jobs.WEATHER_REBUILD_ASSET_KEYS)
+    assert all(
+        evaluation.passed for evaluation in result.get_asset_check_evaluations()
+    )
+    processed_object = s3_client.get_object(
+        Bucket=PROCESSED_BUCKET,
+        Key="20260913/daily_weather_conditions.parquet",
+    )
+    conditions = pl.read_parquet(BytesIO(processed_object["Body"].read()))
+    assert conditions.schema == processed.DAILY_WEATHER_CONDITIONS_SCHEMA
+    assert conditions.select("station_id", "station_name").row(0) == (
+        "11001",
+        "宗谷岬",
+    )
+
+
+@pytest.mark.parametrize(
+    "missing_filename",
+    [
+        pytest.param("precipitation.csv", id="precipitation"),
+        pytest.param("max_temperature.csv", id="max-temperature"),
+        pytest.param("min_temperature.csv", id="min-temperature"),
+        pytest.param("max_wind.csv", id="max-wind"),
+        pytest.param("max_gust.csv", id="max-gust"),
+        pytest.param("pollen.json", id="pollen"),
+    ],
+)
+def test_weather_rebuild_job_fails_when_a_raw_object_is_missing(
+    monkeypatch, s3_client, tmp_path, missing_filename
+):
+    payloads = _raw_payloads()
+    _mock_inputs(monkeypatch, tmp_path, payloads)
+    monkeypatch.setattr(cleaned, "_today_jst", lambda: date(2026, 9, 13))
+    _store_raw_snapshot(s3_client, payloads, missing_filename)
+
+    result = (
+        _definitions()
+        .resolve_job_def("weather_rebuild_job")
+        .execute_in_process(raise_on_error=False)
+    )
+
+    assert not result.success
+    materialized_assets = {
+        event.asset_key.to_user_string()
+        for event in result.get_asset_materialization_events()
+    }
+    assert "daily_weather_conditions" not in materialized_assets
 
 
 @pytest.mark.parametrize(

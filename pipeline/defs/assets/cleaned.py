@@ -190,6 +190,10 @@ def find_column(columns: list[str], pattern: str) -> str:
     return matches[0]
 
 
+def _today_jst() -> date:
+    return datetime.now(JST).date()
+
+
 def _source_object(
     context: AssetExecutionContext, raw_asset: str, filename: str
 ) -> tuple[str, date]:
@@ -202,7 +206,11 @@ def _source_object(
         for record in records
         if record.event_log_entry.dagster_event.asset_key == AssetKey(raw_asset)
     ]
-    if len(materializations) != 1:
+    # Fall back to today's existing raw object when the raw asset was not materialized in this run
+    if not materializations:
+        observation_date = _today_jst()
+        return f"{observation_date:%Y%m%d}/{filename}", observation_date
+    if len(materializations) > 1:
         raise RuntimeError(
             f"Expected exactly one {raw_asset} materialization in run {context.run.run_id}, "
             f"found {len(materializations)}"

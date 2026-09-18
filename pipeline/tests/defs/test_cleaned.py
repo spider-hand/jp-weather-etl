@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 import pytest
-from dagster import DagsterEventType, materialize
+from dagster import materialize
 
 from pipeline.defs.assets import cleaned
 
@@ -437,15 +437,22 @@ def test_find_column(columns, expected):
     assert f"Available columns: {columns!r}" in str(error.value)
 
 
-def test_cleaned_asset_fails_without_raw_materialization_in_same_run():
-    result = materialize([cleaned.precipitation_cleaned], raise_on_error=False)
+def test_cleaned_asset_uses_todays_raw_object_without_same_run_materialization(
+    monkeypatch,
+):
+    requested_keys = []
 
-    assert not result.success
-    failure = next(
-        event
-        for event in result.all_events
-        if event.event_type is DagsterEventType.STEP_FAILURE
-    )
-    assert "Expected exactly one precipitation_raw materialization" in str(
-        failure.event_specific_data.error
-    )
+    def read_raw_csv(object_key):
+        requested_keys.append(object_key)
+        return _frame(
+            ["13日の値(mm)", "13日の値の品質情報"],
+            ["0.0", "5"],
+        )
+
+    monkeypatch.setattr(cleaned, "_today_jst", lambda: date(2026, 9, 13))
+    monkeypatch.setattr(cleaned, "_read_raw_csv", read_raw_csv)
+
+    result = materialize([cleaned.precipitation_cleaned])
+
+    assert result.success
+    assert requested_keys == ["20260913/precipitation.csv"]
