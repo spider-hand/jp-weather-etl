@@ -19,16 +19,16 @@ down:
 	docker compose down
 
 ui:
-	uv run --env-file .env streamlit run ui/main.py
+	npm --prefix ui run dev
 
 query:
 	uv run --env-file .env python -m queries.analytics "$(SQL)"
 
 format:
-	uv run ruff format storage queries pipeline ui
+	uv run ruff format storage queries pipeline
 
 lint:
-	uv run ruff check storage queries pipeline ui
+	uv run ruff check storage queries pipeline
 
 test:
 	uv run pytest

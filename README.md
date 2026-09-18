@@ -2,7 +2,7 @@
 
 A Dagster-based ETL pipeline for weather data in Japan
 
-Inspired by live weather reports, this pipeline runs on demand instead of on a fixed schedule. Each run creates a snapshot of the observations available so far that day.
+This pipeline runs on demand and creates a snapshot of the observations available so far that day rather than running on a schedule, as the project is mainly for learning Dagster and runs locally. The concept is inspired by live weather reports.
 
 ## Setup
 
@@ -10,6 +10,7 @@ Install the project dependencies:
 
 ```sh
 uv sync
+npm --prefix ui install
 ```
 
 Set up environment variables:
@@ -26,6 +27,9 @@ make dev
 
 The Dagster UI is available at http://localhost:3000, the S3 API at
 http://localhost:9000, and the RustFS console at http://localhost:9001.
+
+Run `make ui` to visualize the result on that day. It is available at
+http://localhost:5173.
 
 ## Pipeline Architecture
 
@@ -79,15 +83,15 @@ $ make query SQL="SELECT date, station_name, max_temperature_c FROM hottest(DATE
 └────────────┴──────────────┴───────────────────┘
 ```
 
-| Name                    | Arguments                                                | Description                                                                                                              |
-| ----------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `all_weather_conditions` | `p_date DATE`                                            | Returns all weather conditions on the date.                                                                              |
-| `hottest`               | `p_date DATE`                                            | Returns the highest maximum temperature on the date.                                                                     |
-| `coldest`               | `p_date DATE`                                            | Returns the lowest minimum temperature on the date.                                                                      |
-| `highest_precipitation` | `p_date DATE`                                            | Returns the highest precipitation on the date.                                                                           |
-| `strongest_gust`        | `p_date DATE`                                            | Returns the strongest gust on the date.                                                                                  |
-| `nearest_stations`      | `p_date DATE`, `p_latitude DOUBLE`, `p_longitude DOUBLE` | Returns the nearest station to the coordinates on the date.                                                              |
-| `daily_summary`         | `p_date DATE`                                            | Returns a weather summary for the date.                                                                                  |
+| Name                     | Arguments                                                | Description                                                 |
+| ------------------------ | -------------------------------------------------------- | ----------------------------------------------------------- |
+| `all_weather_conditions` | `p_date DATE`                                            | Returns all weather conditions on the date.                 |
+| `hottest`                | `p_date DATE`                                            | Returns the highest maximum temperature on the date.        |
+| `coldest`                | `p_date DATE`                                            | Returns the lowest minimum temperature on the date.         |
+| `highest_precipitation`  | `p_date DATE`                                            | Returns the highest precipitation on the date.              |
+| `strongest_gust`         | `p_date DATE`                                            | Returns the strongest gust on the date.                     |
+| `nearest_stations`       | `p_date DATE`, `p_latitude DOUBLE`, `p_longitude DOUBLE` | Returns the nearest station to the coordinates on the date. |
+| `daily_summary`          | `p_date DATE`                                            | Returns a weather summary for the date.                     |
 
 ## Data Sources
 
