@@ -1,4 +1,4 @@
-.PHONY: dev ui down storage-up storage-setup storage-smoke storage-reset query format lint test
+.PHONY: dev down storage-up storage-setup storage-smoke storage-reset query format lint test
 
 storage-up:
 	docker compose up -d --wait
@@ -17,9 +17,6 @@ dev: storage-setup
 
 down:
 	docker compose down
-
-ui:
-	npm --prefix ui run dev
 
 query:
 	uv run --env-file .env python -m queries.analytics "$(SQL)"

@@ -10,7 +10,6 @@ Install the project dependencies:
 
 ```sh
 uv sync
-npm --prefix ui install
 ```
 
 Set up environment variables:
@@ -27,9 +26,6 @@ make dev
 
 The Dagster UI is available at http://localhost:3000, the S3 API at
 http://localhost:9000, and the RustFS console at http://localhost:9001.
-
-Run `make ui` to visualize the result on that day. It is available at
-http://localhost:5173.
 
 ## Jobs
 
