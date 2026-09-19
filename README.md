@@ -31,6 +31,13 @@ http://localhost:9000, and the RustFS console at http://localhost:9001.
 Run `make ui` to visualize the result on that day. It is available at
 http://localhost:5173.
 
+## Jobs
+
+| Name                  | Description                                        |
+| --------------------- | -------------------------------------------------- |
+| `weather_etl_job`     | Fetch raw data and build today's snapshots.        |
+| `weather_rebuild_job` | Rebuild today's snapshots from existing raw files. |
+
 ## Pipeline Architecture
 
 ```mermaid
