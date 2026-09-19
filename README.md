@@ -77,13 +77,49 @@ Processed weather snapshots can be queried directly with DuckDB.
 Example:
 
 ```console
-$ make query SQL="SELECT date, station_name, max_temperature_c FROM hottest(DATE '2026-09-16')"
-┌────────────┬──────────────┬───────────────────┐
-│    date    │ station_name │ max_temperature_c │
-│    date    │   varchar    │      double       │
-├────────────┼──────────────┼───────────────────┤
-│ 2026-09-16 │ 鹿児島       │              32.1 │
-└────────────┴──────────────┴───────────────────┘
+$ make query SQL="SELECT * FROM daily_summary(DATE '2026-09-19')"
+┌──────────────────────────────────────┬───────────────────────────┐
+│ date                                 │ 2026-09-19                │
+│ observed_at                          │ 2026-09-19 13:00:00+09:00 │
+│ highest_max_temperature_station_name │ 京都                      │
+│ highest_max_temperature_c            │ 32.3                      │
+│ lowest_min_temperature_station_name  │ 旭川                      │
+│ lowest_min_temperature_c             │ 9.1                       │
+│ maximum_precipitation_station_name   │ 油津                      │
+│ maximum_precipitation_mm             │ 80.5                      │
+│ strongest_gust_station_name          │ 父島                      │
+│ strongest_gust_speed_ms              │ 30.4                      │
+└──────────────────────────────────────┴───────────────────────────┘
+```
+
+```console
+$ make query SQL="SELECT * FROM all_weather_conditions(DATE '2026-09-19') WHERE station_name = '東京'"
+
+┌────────────────────────────┬──────────────────────────────────────────────────────────────┐
+│ station_id                 │ 44132                                                        │
+│ date                       │ 2026-09-19                                                   │
+│ observed_at                │ 2026-09-19 13:00:00+09:00                                    │
+│ station_name               │ 東京                                                         │
+│ latitude                   │ 35.69166666666667                                            │
+│ longitude                  │ 139.75                                                       │
+│ precipitation_mm           │ 1.5                                                          │
+│ precipitation_quality      │ 4                                                            │
+│ max_temperature_c          │ 24.0                                                         │
+│ max_temperature_quality    │ 4                                                            │
+│ min_temperature_c          │ 20.5                                                         │
+│ min_temperature_quality    │ 4                                                            │
+│ max_wind_speed_ms          │ 3.9                                                          │
+│ max_wind_quality           │ 4                                                            │
+│ max_wind_direction         │ 北北東                                                       │
+│ max_wind_direction_quality │ 4                                                            │
+│ max_gust_speed_ms          │ 8.8                                                          │
+│ max_gust_quality           │ 4                                                            │
+│ max_gust_direction         │ 北北西                                                       │
+│ max_gust_direction_quality │ 4                                                            │
+│ grass_info                 │ {'value': 1, 'plants': [{'code': 'GRAMINALES', 'value': 1}]} │
+│ tree_info                  │ {'value': None, 'plants': []}                                │
+│ weed_info                  │ NULL                                                         │
+└────────────────────────────┴──────────────────────────────────────────────────────────────┘
 ```
 
 | Name                     | Arguments                                                | Description                                                 |

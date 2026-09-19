@@ -5,7 +5,7 @@ import duckdb
 import polars as pl
 import pytest
 
-from queries.analytics import connect
+from queries.analytics import _format_vertical, connect
 
 OBSERVATION_DATE = date(2026, 9, 17)
 OBSERVED_AT = datetime(2026, 9, 17, 12, tzinfo=ZoneInfo("Asia/Tokyo"))
@@ -14,6 +14,7 @@ OBSERVED_AT = datetime(2026, 9, 17, 12, tzinfo=ZoneInfo("Asia/Tokyo"))
 def _write_weather_parquet(tmp_path, **overrides):
     weather = {
         "station_id": ["A", "B", "C", "D"],
+        "station_name": ["Alpha", "Bravo", "Charlie", "Delta"],
         "date": [OBSERVATION_DATE] * 4,
         "observed_at": [OBSERVED_AT] * 4,
         "latitude": [35.0] * 4,
@@ -183,7 +184,7 @@ def test_nearest_stations_returns_nearest_station(tmp_path):
     assert result[0][1] == pytest.approx(0.0)
 
 
-def test_daily_summary_returns_daily_aggregates(tmp_path):
+def test_daily_summary_returns_extremes_with_station_names(tmp_path):
     parquet_path = _write_weather_parquet(
         tmp_path,
         max_temperature_c=[30.0, 35.0, 32.0, None],
@@ -200,21 +201,39 @@ def test_daily_summary_returns_daily_aggregates(tmp_path):
     assert columns == [
         "date",
         "observed_at",
+        "highest_max_temperature_station_name",
         "highest_max_temperature_c",
+        "lowest_min_temperature_station_name",
         "lowest_min_temperature_c",
-        "average_max_temperature_c",
-        "average_min_temperature_c",
+        "maximum_precipitation_station_name",
         "maximum_precipitation_mm",
+        "strongest_gust_station_name",
         "strongest_gust_speed_ms",
     ]
     assert summary[0] == OBSERVATION_DATE
     assert summary[1] == OBSERVED_AT
-    assert summary[2] == 35.0
-    assert summary[3] == 15.0
-    assert summary[4] == pytest.approx(32.33, rel=0.01)
-    assert summary[5] == pytest.approx(17.67, rel=0.01)
-    assert summary[6] == 10.0
-    assert summary[7] == 12.0
+    assert summary[2] == "Bravo"
+    assert summary[3] == 35.0
+    assert summary[4] == "Bravo"
+    assert summary[5] == 15.0
+    assert summary[6] == "Bravo"
+    assert summary[7] == 10.0
+    assert summary[8] == "Bravo"
+    assert summary[9] == 12.0
+
+
+def test_daily_summary_uses_first_station_by_id_for_tied_extremes(tmp_path):
+    parquet_path = _write_weather_parquet(tmp_path)
+
+    with connect(str(parquet_path)) as connection:
+        summary = connection.execute(
+            "SELECT * FROM daily_summary(DATE '2026-09-17')"
+        ).fetchone()
+
+    assert summary[2] == "Alpha"
+    assert summary[4] == "Alpha"
+    assert summary[6] == "Alpha"
+    assert summary[8] == "Alpha"
 
 
 @pytest.mark.parametrize(
@@ -259,3 +278,48 @@ def test_query_returns_no_rows_for_missing_date(tmp_path, query):
         result = connection.execute(query).fetchall()
 
     assert result == []
+
+
+def test_vertical_output_displays_field_names_and_values_without_headers():
+    columns = ["date", "station_name", "max_temperature_c"]
+    rows = [("2026-09-16", "鹿児島", 32.1)]
+
+    output = _format_vertical(columns, rows)
+
+    assert (
+        output
+        == """\
+┌───────────────────┬────────────┐
+│ date              │ 2026-09-16 │
+│ station_name      │ 鹿児島     │
+│ max_temperature_c │ 32.1       │
+└───────────────────┴────────────┘"""
+    )
+
+
+def test_vertical_output_separates_records_without_row_numbers():
+    columns = ["station_name", "max_temperature_c"]
+    rows = [("Tokyo", 32.1), ("Osaka", 31.8)]
+
+    output = _format_vertical(columns, rows)
+
+    assert (
+        output
+        == """\
+┌───────────────────┬───────┐
+│ station_name      │ Tokyo │
+│ max_temperature_c │ 32.1  │
+├───────────────────┼───────┤
+│ station_name      │ Osaka │
+│ max_temperature_c │ 31.8  │
+└───────────────────┴───────┘"""
+    )
+
+
+def test_vertical_output_is_empty_when_query_returns_no_rows():
+    columns = ["station_name"]
+    rows = []
+
+    output = _format_vertical(columns, rows)
+
+    assert output == ""

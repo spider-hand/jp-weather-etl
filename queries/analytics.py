@@ -1,6 +1,7 @@
 """Run SQL against the processed weather Parquet files with DuckDB."""
 
 import argparse
+import unicodedata
 from importlib.resources import files
 
 import duckdb
@@ -8,6 +9,47 @@ import duckdb
 from storage import PROCESSED_BUCKET, StorageSettings
 
 WEATHER_SOURCE = f"s3://{PROCESSED_BUCKET}/*/daily_weather_conditions.parquet"
+
+
+def _display_width(value: str) -> int:
+    return sum(
+        0
+        if unicodedata.combining(character)
+        else 2
+        if unicodedata.east_asian_width(character) in {"F", "W"}
+        else 1
+        for character in value
+    )
+
+
+def _pad(value: str, width: int) -> str:
+    return value + " " * (width - _display_width(value))
+
+
+def _format_vertical(columns: list[str], rows: list[tuple[object, ...]]) -> str:
+    if not rows:
+        return ""
+
+    values = [
+        ["NULL" if value is None else str(value) for value in row] for row in rows
+    ]
+    field_width = max(_display_width(column) for column in columns)
+    value_width = max(_display_width(value) for row in values for value in row)
+    top = f"┌{'─' * (field_width + 2)}┬{'─' * (value_width + 2)}┐"
+    divider = f"├{'─' * (field_width + 2)}┼{'─' * (value_width + 2)}┤"
+    bottom = f"└{'─' * (field_width + 2)}┴{'─' * (value_width + 2)}┘"
+    lines = [top]
+
+    for index, row in enumerate(values):
+        if index:
+            lines.append(divider)
+        lines.extend(
+            f"│ {_pad(column, field_width)} │ {_pad(value, value_width)} │"
+            for column, value in zip(columns, row, strict=True)
+        )
+
+    lines.append(bottom)
+    return "\n".join(lines)
 
 
 def _quote(value: str) -> str:
@@ -63,7 +105,10 @@ def main() -> None:
     args = parser.parse_args()
 
     with connect() as connection:
-        connection.sql(args.sql).show(max_rows=1000)
+        relation = connection.sql(args.sql)
+        output = _format_vertical(relation.columns, relation.fetchmany(1000))
+        if output:
+            print(output)
 
 
 if __name__ == "__main__":
