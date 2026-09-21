@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo
 import polars as pl
 import pytest
 
-from pipeline.defs.assets import cleaned, processed, stations, weather
-from storage import PROCESSED_BUCKET
+from jp_weather_etl.pipeline.defs.assets import cleaned, processed, stations, weather
+from jp_weather_etl.storage import PROCESSED_BUCKET
 
 OBSERVATION_DATE = date(2026, 9, 13)
 OBSERVED_AT = datetime(2026, 9, 13, 14, tzinfo=ZoneInfo("Asia/Tokyo"))
@@ -89,9 +89,7 @@ def test_daily_weather_conditions_geojson_contains_every_station_point():
     )
 
     assert feature_collection["type"] == "FeatureCollection"
-    assert [
-        feature["geometry"] for feature in feature_collection["features"]
-    ] == [
+    assert [feature["geometry"] for feature in feature_collection["features"]] == [
         {"type": "Point", "coordinates": [139.0, 35.0]},
         {"type": "Point", "coordinates": [140.0, 36.0]},
     ]
@@ -170,9 +168,7 @@ def test_daily_weather_conditions_stores_verified_parquet_and_geojson(s3_client)
         "file_size_bytes": len(parquet_payload),
         "sha256": sha256(parquet_payload).hexdigest(),
         "geojson_destination_bucket": PROCESSED_BUCKET,
-        "geojson_destination_object_key": (
-            "20260913/daily_weather_conditions.geojson"
-        ),
+        "geojson_destination_object_key": ("20260913/daily_weather_conditions.geojson"),
         "geojson_destination_uri": (
             "s3://processed/20260913/daily_weather_conditions.geojson"
         ),

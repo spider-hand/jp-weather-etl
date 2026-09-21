@@ -4,10 +4,10 @@ storage-up:
 	docker compose up -d --wait
 
 storage-setup: storage-up
-	uv run --env-file .env python -m storage.setup
+	uv run --env-file .env python -m jp_weather_etl.storage.setup
 
 storage-smoke: storage-setup
-	uv run --env-file .env python -m storage.smoke
+	uv run --env-file .env python -m jp_weather_etl.storage.smoke
 
 storage-reset:
 	docker compose down -v
@@ -19,13 +19,13 @@ down:
 	docker compose down
 
 query:
-	uv run --env-file .env python -m queries.analytics "$(SQL)"
+	uv run --env-file .env python -m jp_weather_etl.queries.analytics "$(SQL)"
 
 format:
-	uv run ruff format storage queries pipeline
+	uv run ruff format src tests
 
 lint:
-	uv run ruff check storage queries pipeline
+	uv run ruff check src tests
 
 test:
 	uv run pytest

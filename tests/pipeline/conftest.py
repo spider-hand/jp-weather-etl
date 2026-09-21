@@ -2,8 +2,8 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from pipeline.defs.assets import cleaned, processed, raw
-from storage import PROCESSED_BUCKET, RAW_BUCKET
+from jp_weather_etl.pipeline.defs.assets import cleaned, processed, raw
+from jp_weather_etl.storage import PROCESSED_BUCKET, RAW_BUCKET
 
 
 @pytest.fixture

@@ -7,9 +7,12 @@ from typing import Final
 import polars as pl
 from dagster import MaterializeResult, asset
 
-from pipeline.defs.assets.cleaned import POLLEN_INFO_COLUMNS, POLLEN_INFO_SCHEMA
-from pipeline.defs.assets.weather import DAILY_WEATHER_SCHEMA
-from storage import (
+from jp_weather_etl.pipeline.defs.assets.cleaned import (
+    POLLEN_INFO_COLUMNS,
+    POLLEN_INFO_SCHEMA,
+)
+from jp_weather_etl.pipeline.defs.assets.weather import DAILY_WEATHER_SCHEMA
+from jp_weather_etl.storage import (
     PROCESSED_BUCKET,
     create_s3_client,
     upload_verified_payload,

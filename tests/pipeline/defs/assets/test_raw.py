@@ -7,8 +7,8 @@ import polars as pl
 import pytest
 from dagster import build_asset_context
 
-from pipeline.defs.assets import raw
-from storage import RAW_BUCKET
+from jp_weather_etl.pipeline.defs.assets import raw
+from jp_weather_etl.storage import RAW_BUCKET
 
 
 class FrozenDateTime:

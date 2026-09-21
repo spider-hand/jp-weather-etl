@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import polars as pl
 from dagster import AssetExecutionContext, MaterializeResult, asset
 
-from storage import (
+from jp_weather_etl.storage import (
     RAW_BUCKET,
     create_s3_client,
     upload_verified_payload,

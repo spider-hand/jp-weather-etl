@@ -2,7 +2,7 @@
 
 import json
 
-from storage import BUCKETS, PROCESSED_BUCKET, create_s3_client
+from jp_weather_etl.storage import BUCKETS, PROCESSED_BUCKET, create_s3_client
 
 PROCESSED_READ_POLICY = {
     "Version": "2012-10-17",

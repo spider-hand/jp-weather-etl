@@ -1,12 +1,13 @@
 """Build the WMO station dimension from the JMA station master."""
 
+from importlib.resources import as_file, files
 from pathlib import Path
 from typing import Final
 
 import polars as pl
 from dagster import AssetExecutionContext, asset
 
-STATION_MASTER_PATH: Final = Path(__file__).parents[3] / "data/station_master.csv"
+STATION_MASTER_PATH: Final = files("jp_weather_etl.data").joinpath("station_master.csv")
 STATION_MASTER_COLUMNS: Final = {
     "観測所番号": "station_id",
     "観測所名": "station_name",
@@ -40,6 +41,11 @@ def _read_station_master(path: Path) -> pl.DataFrame:
             for source, target in STATION_MASTER_COLUMNS.items()
         )
     )
+
+
+def _read_packaged_station_master() -> pl.DataFrame:
+    with as_file(STATION_MASTER_PATH) as path:
+        return _read_station_master(path)
 
 
 def _select_wmo_stations(
@@ -115,7 +121,7 @@ def wmo_stations(
 ) -> pl.DataFrame:
     result, duplicate_ids = _select_wmo_stations(
         daily_weather,
-        _read_station_master(STATION_MASTER_PATH),
+        _read_packaged_station_master(),
     )
     if duplicate_ids:
         context.log.warning(

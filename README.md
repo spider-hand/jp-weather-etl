@@ -142,6 +142,6 @@ Pollen data is provided by the [Google Maps Platform Pollen API](https://develop
 
 [MIT](./LICENSE)
 
-`data/station_master.csv` is subject to the JMA's applicable terms of use, as it contains data provided by the JMA.
+`src/jp_weather_etl/data/station_master.csv` is subject to the JMA's applicable terms of use, as it contains data provided by the JMA.
 
 Copyright (c) 2026-present, Akinori Hoshina

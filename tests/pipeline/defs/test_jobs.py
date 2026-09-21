@@ -6,9 +6,15 @@ import polars as pl
 import pytest
 from dagster import Definitions
 
-from pipeline.defs import jobs
-from pipeline.defs.assets import cleaned, processed, raw, stations, weather
-from storage import PROCESSED_BUCKET, RAW_BUCKET
+from jp_weather_etl.pipeline.defs import jobs
+from jp_weather_etl.pipeline.defs.assets import (
+    cleaned,
+    processed,
+    raw,
+    stations,
+    weather,
+)
+from jp_weather_etl.storage import PROCESSED_BUCKET, RAW_BUCKET
 
 COMMON_HEADERS = [
     "観測所番号",
@@ -339,9 +345,7 @@ def test_weather_rebuild_job_reuses_todays_raw_snapshot(
         for event in result.get_asset_materialization_events()
     }
     assert materialized_assets == set(jobs.WEATHER_REBUILD_ASSET_KEYS)
-    assert all(
-        evaluation.passed for evaluation in result.get_asset_check_evaluations()
-    )
+    assert all(evaluation.passed for evaluation in result.get_asset_check_evaluations())
     processed_object = s3_client.get_object(
         Bucket=PROCESSED_BUCKET,
         Key="20260913/daily_weather_conditions.parquet",

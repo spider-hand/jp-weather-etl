@@ -19,7 +19,7 @@ from dagster import (
     asset_check,
 )
 
-from storage import RAW_BUCKET, create_s3_client
+from jp_weather_etl.storage import RAW_BUCKET, create_s3_client
 
 COMMON_COLUMN_MAPPING: Final = {
     "観測所番号": "station_id",

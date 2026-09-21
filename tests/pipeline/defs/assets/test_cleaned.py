@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 from dagster import materialize
 
-from pipeline.defs.assets import cleaned
+from jp_weather_etl.pipeline.defs.assets import cleaned
 
 COMMON_HEADERS = [
     "観測所番号",

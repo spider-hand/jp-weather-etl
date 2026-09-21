@@ -3,8 +3,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from storage import StorageSettings
-from storage.setup import setup_storage
+from jp_weather_etl.storage import StorageSettings
+from jp_weather_etl.storage.setup import setup_storage
 
 
 def test_setup_storage_allows_browsers_to_read_processed_objects(monkeypatch):
@@ -12,7 +12,7 @@ def test_setup_storage_allows_browsers_to_read_processed_objects(monkeypatch):
     client.list_buckets.return_value = {
         "Buckets": [{"Name": "raw"}, {"Name": "processed"}]
     }
-    monkeypatch.setattr("storage.setup.create_s3_client", lambda: client)
+    monkeypatch.setattr("jp_weather_etl.storage.setup.create_s3_client", lambda: client)
 
     setup_storage()
 

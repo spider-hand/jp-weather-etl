@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import polars as pl
 import pytest
 
-from pipeline.defs.assets import cleaned, weather
+from jp_weather_etl.pipeline.defs.assets import cleaned, weather
 
 OBSERVATION_DATE = date(2026, 9, 13)
 FOURTEEN_OCLOCK = datetime(2026, 9, 13, 14, tzinfo=ZoneInfo("Asia/Tokyo"))

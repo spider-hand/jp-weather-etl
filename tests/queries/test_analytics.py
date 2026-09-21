@@ -5,7 +5,7 @@ import duckdb
 import polars as pl
 import pytest
 
-from queries.analytics import _format_vertical, connect
+from jp_weather_etl.queries.analytics import _format_vertical, connect
 
 OBSERVATION_DATE = date(2026, 9, 17)
 OBSERVED_AT = datetime(2026, 9, 17, 12, tzinfo=ZoneInfo("Asia/Tokyo"))

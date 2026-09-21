@@ -2,6 +2,12 @@
 
 __pycache__/
 *.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
 
 # Dagster temporary local instance
 .tmp_dagster_home_*/

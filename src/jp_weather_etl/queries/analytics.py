@@ -6,7 +6,7 @@ from importlib.resources import files
 
 import duckdb
 
-from storage import PROCESSED_BUCKET, StorageSettings
+from jp_weather_etl.storage import PROCESSED_BUCKET, StorageSettings
 
 WEATHER_SOURCE = f"s3://{PROCESSED_BUCKET}/*/daily_weather_conditions.parquet"
 
@@ -86,7 +86,7 @@ def connect(weather_source: str = WEATHER_SOURCE) -> duckdb.DuckDBPyConnection:
             _configure_s3(connection)
 
         connection.execute("SET VARIABLE weather_source = ?", [weather_source])
-        sql_root = files("queries")
+        sql_root = files("jp_weather_etl.queries")
         connection.execute(
             sql_root.joinpath("weather_conditions.sql").read_text(encoding="utf-8")
         )

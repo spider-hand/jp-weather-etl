@@ -3,7 +3,7 @@ from datetime import date
 import polars as pl
 import pytest
 
-from pipeline.defs.assets import stations
+from jp_weather_etl.pipeline.defs.assets import stations
 
 MASTER_HEADERS = list(stations.STATION_MASTER_COLUMNS)
 
@@ -30,6 +30,15 @@ def _station_master(tmp_path, rows):
     csv = "\r\n".join([",".join(MASTER_HEADERS), *(",".join(row) for row in rows)])
     path.write_bytes((csv + "\r\n").encode("cp932"))
     return stations._read_station_master(path)
+
+
+def test_packaged_station_master_is_readable():
+    expected_columns = list(stations.STATION_MASTER_COLUMNS.values())
+
+    station_master = stations._read_packaged_station_master()
+
+    assert station_master.height > 0
+    assert station_master.columns == expected_columns
 
 
 def test_wmo_stations(tmp_path):
